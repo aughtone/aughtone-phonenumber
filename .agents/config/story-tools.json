@@ -1,0 +1,15 @@
+{
+  "tracker": {
+    "type": "github",
+    "connection": "github-aughtone-phonenumber",
+    "mcpServer": "github-aughtone-phonenumber",
+    "repo": "aughtone/aughtone-phonenumber",
+    "prefix": "AOPH"
+  },
+  "snapshot": "synced",
+  "updates": {
+    "check": true,
+    "skillsRepo": "bpappin/skills",
+    "skillsBranch": "master"
+  }
+}

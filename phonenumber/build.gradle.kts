@@ -50,12 +50,14 @@ kotlin {
                 output.libraryTarget = "commonjs2"
             }
         }
+        nodejs() // headless test runner (no browser needed for CI/`*NodeTest`)
         useEsModules() // Enables ES2015 modules
     }
     @OptIn(ExperimentalWasmDsl::class)
     wasmJs {
         browser {
         }
+        nodejs() // headless test runner; proves wasmJs runtime output is byte-identical
     }
 
     val xcf = XCFramework("PhoneNumber")
@@ -102,6 +104,13 @@ kotlin {
         val commonTest by getting {
             dependencies {
                 implementation(libs.kotlin.test)
+            }
+        }
+        // JVM-only: the reference implementation, for ground-truth correctness
+        // checks (compare our E.164 output against libphonenumber Java).
+        val jvmTest by getting {
+            dependencies {
+                implementation(libs.libphonenumber.java)
             }
         }
     }

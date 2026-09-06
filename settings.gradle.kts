@@ -29,3 +29,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "PhoneNumber"
 include(":phonenumber")
+include(":metadata-generator")

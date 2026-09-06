@@ -18,6 +18,16 @@ This port embeds a **pinned** slice of libphonenumber metadata and treats its ve
 - A metadata bump is a **new epoch** shipped as a new library version — never an in-place change within a version.
 - The epoch is readable at runtime (see Usage) so consumers can record which epoch produced a given value.
 
+## Why this ships its own regex matcher
+
+libphonenumber's parsing and validation are regex-driven, and `kotlin.text.Regex` is **not one engine** across Kotlin Multiplatform targets: JVM uses `java.util.regex`, JS uses the host `RegExp`, and **Kotlin/Native and Kotlin/Wasm share a Kotlin implementation** that mis-backtracks non-capturing groups with unequal-length alternatives — a construct libphonenumber patterns use heavily. The effect is that the *same* number can validate on JVM/JS yet be rejected on iOS or wasmJs, which silently breaks byte-stable output on exactly the targets that motivated this port.
+
+Because that would defeat the purpose of a versioned, byte-stable normalizer, this library uses its **own small deterministic regex matcher** (in `commonMain`, for the metadata pattern subset) on every target. One engine everywhere means identical output by construction, independent of platform regex quirks.
+
+Upstream issues:
+- [KT-89187](https://youtrack.jetbrains.com/issue/KT-89187) — Kotlin/Native and Kotlin/Wasm: `Regex` fails to backtrack across unequal-length alternatives in a group (differs from JVM and Kotlin/JS). Filed by this project.
+- [KT-57906](https://youtrack.jetbrains.com/issue/KT-57906) — K/N: behaviour differs from JVM for regexes with backreferences (related; same non-JVM regex engine).
+
 ## Features
 
 - **100% pure Kotlin** in `commonMain` — no `expect`/`actual` platform wrappers for the core.

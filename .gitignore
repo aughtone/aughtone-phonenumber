@@ -13,3 +13,7 @@ xcuserdata
 *.gpg
 # Scratch: removed but not yet deleted.
 _to_delete/
+# BEGIN story-tools (generated - do not edit between markers)
+docs/stories/
+.agents/config/dimensions.md
+# END story-tools
