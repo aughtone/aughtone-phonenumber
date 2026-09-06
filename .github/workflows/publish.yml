@@ -1,0 +1,160 @@
+name: Publish
+
+on:
+  push:
+    branches: [ "master" ]
+  release:
+    types: [published]
+
+env:
+  GRADLE_OPTS: -Dorg.gradle.jvmargs="-Xmx4g -XX:MaxMetaspaceSize=512m -XX:+UseParallelGC"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  create-release:
+    name: Create GitHub Release
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get_version.outputs.VERSION }}
+      tag_exists: ${{ steps.check_tag.outputs.exists }}
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get version
+        id: get_version
+        run: |
+          VERSION=$(grep "versionName =" gradle/libs.versions.toml | cut -d'"' -f2)
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Check if tag exists
+        id: check_tag
+        run: |
+          if git ls-remote --tags origin | grep -q "refs/tags/v${{ steps.get_version.outputs.VERSION }}$"; then
+            echo "Tag v${{ steps.get_version.outputs.VERSION }} already exists. Skipping release."
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "Tag v${{ steps.get_version.outputs.VERSION }} does not exist. Proceeding with release."
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Release
+        if: steps.check_tag.outputs.exists == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.get_version.outputs.VERSION }}
+          name: Release ${{ steps.get_version.outputs.VERSION }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          target_commitish: master
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish:
+    name: Build, Package, and Publish
+    needs: create-release
+    if: |
+      always() && (
+        github.event_name == 'release' ||
+        (github.event_name == 'push' && 
+         needs.create-release.result == 'success' && 
+         needs.create-release.outputs.tag_exists == 'false')
+      )
+    runs-on: macOS-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: 21
+
+      - name: Get version
+        id: get_version
+        run: |
+          VERSION=$(grep "versionName =" gradle/libs.versions.toml | cut -d'"' -f2)
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Build XCFramework
+        run: ./gradlew :phonenumber:assemblePhoneNumberReleaseXCFramework --no-configuration-cache
+
+      - name: Zip and Checksum XCFramework
+        id: xcframework
+        run: |
+          cd phonenumber/build/XCFrameworks/release
+          zip -r PhoneNumber.xcframework.zip PhoneNumber.xcframework
+          CHECKSUM=$(shasum -a 256 PhoneNumber.xcframework.zip | awk '{ print $1 }')
+          echo "CHECKSUM=$CHECKSUM" >> $GITHUB_OUTPUT
+          mv PhoneNumber.xcframework.zip $GITHUB_WORKSPACE/
+
+      - name: Update Package.swift and Commit
+        run: |
+          VERSION="${{ steps.get_version.outputs.VERSION }}"
+          CHECKSUM="${{ steps.xcframework.outputs.CHECKSUM }}"
+          
+          # Replace version in URL
+          sed -i '' -E "s/download\/v[^\/]+\/PhoneNumber\.xcframework\.zip/download\/v$VERSION\/PhoneNumber.xcframework.zip/" Package.swift
+          # Replace checksum
+          sed -i '' -E "s/checksum: \"[^\"]+\"/checksum: \"$CHECKSUM\"/" Package.swift
+          
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add Package.swift
+          
+          # Only commit and push if there are changes
+          if ! git diff --staged --quiet; then
+            git commit -m "chore: Update Package.swift checksum for v$VERSION [skip ci]"
+            git push origin master
+          fi
+
+      - name: Upload XCFramework to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.get_version.outputs.VERSION }}
+          files: PhoneNumber.xcframework.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sync back to Develop
+        run: |
+          VERSION="${{ steps.get_version.outputs.VERSION }}"
+          
+          # Fetch develop
+          git fetch origin develop:develop
+          git checkout develop
+          
+          # Create a sync branch
+          git checkout -b sync-master-to-develop-v$VERSION
+          
+          # Merge master
+          git merge master -m "Merge master into sync branch for v$VERSION"
+          git push origin sync-master-to-develop-v$VERSION
+          
+          # Create PR (gracefully fall back if Action has no PR permissions)
+          gh pr create \
+            --title "chore: sync master to develop after v$VERSION release" \
+            --body "This PR syncs the automated \`Package.swift\` checksum update back into the develop branch after a release." \
+            --base develop \
+            --head sync-master-to-develop-v$VERSION || echo "Warning: GitHub Actions is not permitted to create pull requests. Please enable it in Settings > Actions > General > Workflow permissions, or create the PR manually."
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish to MavenCentral
+        run: ./gradlew publishToMavenCentral --no-configuration-cache
+        env:
+          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyId: ${{ secrets.SIGNING_KEY_ID }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.SIGNING_PASSWORD }}
+          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.GPG_KEY_CONTENTS }}
