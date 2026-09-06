@@ -2,7 +2,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "PhoneNumber",
+    name: "AOPhoneNumberKit",
     platforms: [
         .iOS(.v13),
         .macOS(.v10_15),
@@ -11,13 +11,13 @@ let package = Package(
     ],
     products: [
         .library(
-            name: "PhoneNumber",
-            targets: ["PhoneNumber"])
+            name: "AOPhoneNumberKit",
+            targets: ["AOPhoneNumberKit"])
     ],
     targets: [
         .binaryTarget(
-            name: "PhoneNumber",
-            url: "https://github.com/aughtone/aughtone-phonenumber/releases/download/v0.0.1-alpha1/PhoneNumber.xcframework.zip",
+            name: "AOPhoneNumberKit",
+            url: "https://github.com/aughtone/aughtone-phonenumber/releases/download/v0.0.1/AOPhoneNumberKit.xcframework.zip",
             checksum: "e8e939ae736599d5c221471d90afd9804c134607e7bc5a40e4cd25f37b197850"
         )
     ]

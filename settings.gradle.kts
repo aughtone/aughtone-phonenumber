@@ -27,6 +27,6 @@ dependencyResolutionManagement {
 }
 
 
-rootProject.name = "PhoneNumber"
+rootProject.name = "AOPhoneNumber"
 include(":phonenumber")
 include(":metadata-generator")
