@@ -1,7 +1,7 @@
 [versions]
 namespace = "io.github.aughtone.phonenumber"
 group = "io.github.aughtone"
-versionName = "0.0.1-alpha1"
+versionName = "0.0.1-alpha0"
 
 # Byte-stability epoch: the pinned libphonenumber metadata release this port
 # embeds. A bump here is a NEW normalization epoch, never an in-place change —
