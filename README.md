@@ -4,7 +4,7 @@ A pure Kotlin Multiplatform (KMP) port of Google's [libphonenumber](https://gith
 
 > **Attribution:** This library is a Kotlin port of the original Java implementation maintained under Google's libphonenumber project. The parsing logic, formatting, validation, and the region metadata are derived from the [official google/libphonenumber repository](https://github.com/google/libphonenumber) and are used under the Apache License, Version 2.0. See [`NOTICE`](NOTICE) for the full attribution. This port is not affiliated with or endorsed by Google.
 
-> **Status:** Alpha. The public API described below is the contract we are building to; it may still change before `1.0`. The metadata epoch (below) is stable and will not change within a released version.
+> **Status:** Pre-1.0 — the `0.0.x` line is the alpha series. The public API described below is the contract we are building to and may change before `1.0`; the metadata epoch (below) is stable and its output will not change within a released version.
 
 ### Why this lives outside Google's repository
 
@@ -41,7 +41,7 @@ Upstream issues:
 
 ```kotlin
 dependencies {
-    implementation("io.github.aughtone:phonenumber:0.0.1-alpha1")
+    implementation("io.github.aughtone:phonenumber:0.0.1")
 }
 ```
 
@@ -51,7 +51,7 @@ This library is distributed to Swift as a precompiled XCFramework.
 
 1. In Xcode: **File > Add Package Dependencies**.
 2. Enter the repository URL: `https://github.com/aughtone/aughtone-phonenumber`
-3. For a prerelease tag (e.g. `-alpha1`) select **Exact Version**.
+3. While on the `0.0.x` line, select **Exact Version** — pre-1.0 releases may make breaking changes.
 4. Add the `PhoneNumber` product to your target.
 
 ## Usage

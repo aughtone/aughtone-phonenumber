@@ -1,5 +1,4 @@
 import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
-import java.util.concurrent.TimeUnit
 import org.jetbrains.kotlin.gradle.plugin.mpp.apple.XCFramework
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompileCommon
 import java.security.MessageDigest
@@ -60,7 +59,7 @@ kotlin {
         nodejs() // headless test runner; proves wasmJs runtime output is byte-identical
     }
 
-    val xcf = XCFramework("PhoneNumber")
+    val xcf = XCFramework("AOPhoneNumberKit")
     listOf(
         iosX64(),
         iosArm64(),
@@ -73,7 +72,7 @@ kotlin {
         watchosSimulatorArm64()
     ).forEach { target ->
         target.binaries.framework {
-            baseName = "PhoneNumber"
+            baseName = "AOPhoneNumberKit"
             isStatic = true
             binaryOption(
                 "bundleId",
@@ -143,7 +142,7 @@ tasks.register("syncPackageSwift") {
     
     val versionValue = libs.versions.versionName.get()
     val packageFile = rootProject.file("Package.swift")
-    val zipFile = project.layout.buildDirectory.file("XCFrameworks/release/PhoneNumber.xcframework.zip")
+    val zipFile = project.layout.buildDirectory.file("XCFrameworks/release/AOPhoneNumberKit.xcframework.zip")
     
     doLast {
         if (!packageFile.exists()) return@doLast
@@ -170,7 +169,7 @@ tasks.register("syncPackageSwift") {
             )
             println("Updated Package.swift checksum to $checksum")
         } else {
-            println("Zip not found at ${file.path}. Run 'assemblePhoneNumberXCFramework' first to update checksum.")
+            println("Zip not found at ${file.path}. Run 'assembleAOPhoneNumberKitXCFramework' first to update checksum.")
         }
         
         packageFile.writeText(content)
