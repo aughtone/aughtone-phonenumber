@@ -87,16 +87,16 @@ jobs:
           echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Build XCFramework
-        run: ./gradlew :phonenumber:assemblePhoneNumberReleaseXCFramework --no-configuration-cache
+        run: ./gradlew :phonenumber:assembleAOPhoneNumberKitReleaseXCFramework --no-configuration-cache
 
       - name: Zip and Checksum XCFramework
         id: xcframework
         run: |
           cd phonenumber/build/XCFrameworks/release
-          zip -r PhoneNumber.xcframework.zip PhoneNumber.xcframework
-          CHECKSUM=$(shasum -a 256 PhoneNumber.xcframework.zip | awk '{ print $1 }')
+          zip -r AOPhoneNumberKit.xcframework.zip AOPhoneNumberKit.xcframework
+          CHECKSUM=$(shasum -a 256 AOPhoneNumberKit.xcframework.zip | awk '{ print $1 }')
           echo "CHECKSUM=$CHECKSUM" >> $GITHUB_OUTPUT
-          mv PhoneNumber.xcframework.zip $GITHUB_WORKSPACE/
+          mv AOPhoneNumberKit.xcframework.zip $GITHUB_WORKSPACE/
 
       - name: Update Package.swift and Commit
         run: |
@@ -104,7 +104,7 @@ jobs:
           CHECKSUM="${{ steps.xcframework.outputs.CHECKSUM }}"
           
           # Replace version in URL
-          sed -i '' -E "s/download\/v[^\/]+\/PhoneNumber\.xcframework\.zip/download\/v$VERSION\/PhoneNumber.xcframework.zip/" Package.swift
+          sed -i '' -E "s/download\/v[^\/]+\/AOPhoneNumberKit\.xcframework\.zip/download\/v$VERSION\/AOPhoneNumberKit.xcframework.zip/" Package.swift
           # Replace checksum
           sed -i '' -E "s/checksum: \"[^\"]+\"/checksum: \"$CHECKSUM\"/" Package.swift
           
@@ -122,7 +122,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.get_version.outputs.VERSION }}
-          files: PhoneNumber.xcframework.zip
+          files: AOPhoneNumberKit.xcframework.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
