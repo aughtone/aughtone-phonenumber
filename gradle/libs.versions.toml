@@ -1,7 +1,7 @@
 [versions]
 namespace = "io.github.aughtone.phonenumber"
 group = "io.github.aughtone"
-versionName = "0.0.1"
+versionName = "0.0.2"
 
 # The pinned libphonenumber metadata release this port embeds. The pin is a
 # change detector: bump it to adopt an upstream release only after confirming the
