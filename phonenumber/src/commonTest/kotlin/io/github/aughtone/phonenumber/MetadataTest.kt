@@ -21,7 +21,7 @@ import kotlin.test.assertEquals
 class MetadataTest {
     @Test
     fun epochIsPinned() {
-        // Guards the byte-stability epoch against an accidental change.
-        assertEquals("9.0.38", METADATA_VERSION)
+        // Guards the pinned metadata version against an accidental change.
+        assertEquals("9.0.39", METADATA_VERSION)
     }
 }

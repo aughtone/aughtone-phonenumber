@@ -29,7 +29,7 @@ public data class PhoneNumber internal constructor(
     val countryCode: Int,
     val nationalNumber: String,
 ) {
-    /** Canonical E.164, e.g. "+16502530000". Byte-stable within a metadata epoch. */
+    /** Canonical E.164, e.g. "+16502530000". Byte-stable within a released version. */
     public fun formatToE164(): String = "+$countryCode$nationalNumber"
 }
 
@@ -43,27 +43,56 @@ public data class PhoneNumber internal constructor(
  */
 public object PhoneNumberUtil {
 
-    /** The embedded libphonenumber metadata epoch (see [METADATA_VERSION]). */
+    /** The embedded libphonenumber metadata version (see [METADATA_VERSION]). */
     public val metadataVersion: String get() = METADATA_VERSION
 
-    public class NumberParseException(message: String) : Exception(message)
+    /** The Unicode version of the embedded decimal-digit table (see [DIGIT_UNICODE_VERSION]). */
+    public val digitUnicodeVersion: String get() = DIGIT_UNICODE_VERSION
+
+    /** Why a parse failed. Mirrors the upstream error categories this subset raises. */
+    public enum class ErrorType { NOT_A_NUMBER, INVALID_COUNTRY_CODE }
+
+    /**
+     * Thrown when a string cannot be parsed. The message is a fixed string and
+     * never contains the input, so logging the exception cannot leak a phone
+     * number; [errorType] carries the machine-readable reason.
+     */
+    public class NumberParseException internal constructor(
+        public val errorType: ErrorType,
+        message: String,
+    ) : Exception(message)
 
     /**
      * Parse [number] as dialed from [defaultRegion] (an ISO region code such as
      * "US"). Handles "+" international form, IDD-prefixed international form, and
      * national form. Returns the number reduced for E.164 formatting.
+     *
+     * @param libphonenumberCompat when true, digit normalization matches upstream
+     *   libphonenumber exactly (BMP decimal digits only; see [normalizeDigitsOnly]).
+     *   Off by default: the default recognises all Unicode
+     *   [DIGIT_UNICODE_VERSION] decimal digits, which is a strict superset of the
+     *   inputs upstream accepts. The flag is a per-call option, never global, so
+     *   output stays byte-stable for a given (input, flag) pair.
      */
-    public fun parse(number: String, defaultRegion: String): PhoneNumber {
+    public fun parse(
+        number: String,
+        defaultRegion: String,
+        libphonenumberCompat: Boolean = false,
+    ): PhoneNumber {
         val meta = GENERATED_METADATA[defaultRegion]
-            ?: throw NumberParseException("No metadata for region: $defaultRegion")
+            ?: throw NumberParseException(ErrorType.NOT_A_NUMBER, "Unknown default region")
 
-        val raw = number.trim()
-        val hasPlus = raw.isNotEmpty() && (raw[0] == '+' || raw[0] == '＋') // ASCII or fullwidth plus
-        // Normalize any decimal digit (ASCII, fullwidth, Arabic-Indic, Eastern
-        // Arabic-Indic) to its ASCII value via an explicit map — deterministic on
-        // every target, not reliant on platform Char.digitToInt tables.
-        val digits = buildString(raw.length) { for (c in raw) toAsciiDigit(c)?.let { append(it) } }
-        if (digits.isEmpty()) throw NumberParseException("No digits in input: $number")
+        // Detect a leading international "+" deterministically: scan code points for
+        // the first ASCII/fullwidth plus or the first Unicode decimal digit,
+        // ignoring anything before it. This is independent of the platform's
+        // Char.isWhitespace() table, so leading spacing/formatting cannot change
+        // the outcome across targets.
+        val hasPlus = leadsWithPlus(number)
+        // Normalize every Unicode decimal digit to its ASCII value; drops all other
+        // characters. Deterministic on every target (frozen table), not reliant on
+        // platform Char.digitToInt / \p{Nd}.
+        val digits = normalizeDigitsOnly(number, libphonenumberCompat)
+        if (digits.isEmpty()) throw NumberParseException(ErrorType.NOT_A_NUMBER, "No digits in input")
 
         if (hasPlus) return fromInternational(digits, defaultRegion)
 
@@ -87,8 +116,12 @@ public object PhoneNumberUtil {
      * region among those sharing the calling code, then requires the national
      * number to match the general pattern and at least one specific type pattern.
      */
-    public fun isValid(number: String, defaultRegion: String): Boolean = try {
-        val pn = parse(number, defaultRegion)
+    public fun isValid(
+        number: String,
+        defaultRegion: String,
+        libphonenumberCompat: Boolean = false,
+    ): Boolean = try {
+        val pn = parse(number, defaultRegion, libphonenumberCompat)
         val region = getRegionForNumber(pn.countryCode, pn.nationalNumber)
         val meta = region?.let { GENERATED_METADATA[it] }
         meta != null && isValidForRegion(pn.nationalNumber, meta)
@@ -127,13 +160,30 @@ public object PhoneNumberUtil {
         return meta.typePatterns.values.any { compiled(it).matches(nsn) }
     }
 
-    /** Map a decimal digit char (ASCII / fullwidth / Arabic-Indic / Eastern Arabic-Indic) to ASCII, else null. */
-    private fun toAsciiDigit(c: Char): Char? = when (c) {
-        in '0'..'9' -> c
-        in '０'..'９' -> '0' + (c - '０') // fullwidth ０-９
-        in '٠'..'٩' -> '0' + (c - '٠') // Arabic-Indic ٠-٩
-        in '۰'..'۹' -> '0' + (c - '۰') // Eastern Arabic-Indic ۰-۹
-        else -> null
+    /**
+     * True if the first meaningful character of [input] is a "+" (ASCII U+002B or
+     * fullwidth U+FF0B), i.e. the number is in international form. Leading
+     * characters that are neither a plus nor a decimal digit are skipped; the first
+     * decimal digit with no preceding plus means national form. Iterates by code
+     * point and uses the frozen digit table, so the result never depends on the
+     * platform's Char.isWhitespace() table.
+     */
+    private fun leadsWithPlus(input: CharSequence): Boolean {
+        var i = 0
+        while (i < input.length) {
+            val c = input[i]
+            if (c == '+' || c == '＋') return true // ASCII or fullwidth plus
+            val cp: Int
+            if (c.isHighSurrogate() && i + 1 < input.length && input[i + 1].isLowSurrogate()) {
+                cp = 0x10000 + ((c.code - 0xD800) shl 10) + (input[i + 1].code - 0xDC00)
+                i += 2
+            } else {
+                cp = c.code
+                i += 1
+            }
+            if (decimalDigitValue(cp) != null) return false
+        }
+        return false
     }
 
     // Compiled-pattern cache. Behaviour is identical to constructing a PhonePattern
@@ -144,7 +194,7 @@ public object PhoneNumberUtil {
 
     private fun fromInternational(digits: String, defaultRegion: String): PhoneNumber =
         tryFromInternational(digits, defaultRegion)
-            ?: throw NumberParseException("No valid country calling code in: +$digits")
+            ?: throw NumberParseException(ErrorType.INVALID_COUNTRY_CODE, "No valid country calling code")
 
     private fun tryFromInternational(digits: String, defaultRegion: String): PhoneNumber? {
         // Country calling codes are 1–3 digits; take the shortest known match.

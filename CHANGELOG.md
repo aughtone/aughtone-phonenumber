@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The `0.0.x` line is the pre-1.0 (alpha) series; the public API may change before `1.0`.
 
+## [0.0.2] - 2026-09-11
+
+Aligns three `parse()` behaviours with upstream libphonenumber and refreshes the embedded metadata to 9.0.39. A few edge inputs now normalize differently — consumers that derive stable tokens from the E.164 output should review **Changed** before adopting.
+
+### Added
+- Public digit-normalization surface a byte-stability-sensitive consumer can pin and reuse: `normalizeDigitsOnly(input, libphonenumberCompat = false)`, `decimalDigitValue(codePoint)`, and `DIGIT_UNICODE_VERSION` (frozen at Unicode **17.0.0**), plus `PhoneNumberUtil.digitUnicodeVersion` ([#4](https://github.com/aughtone/aughtone-phonenumber/issues/2)).
+- `libphonenumberCompat` opt-in parameter on `parse()` and `isValid()` — off by default (the more-correct behaviour), on for digit handling identical to upstream ([#4](https://github.com/aughtone/aughtone-phonenumber/issues/2)).
+- `NumberParseException.errorType` (`ErrorType.NOT_A_NUMBER` / `INVALID_COUNTRY_CODE`) for machine-readable parse failures ([#1](https://github.com/aughtone/aughtone-phonenumber/issues/2)).
+
+### Changed
+- Embedded metadata refreshed **9.0.38 → 9.0.39** (regions BD, HK, IN, PA, PT, TR); verified that no E.164 already produced changes — the update only adds ranges ([#3](https://github.com/aughtone/aughtone-phonenumber/issues/3)).
+- Digit normalization now recognises **all** Unicode 17.0.0 decimal digits (77 blocks, including supplementary code points) by default — a strict superset of before, so previously-accepted input is unchanged. Pass `libphonenumberCompat = true` for the earlier BMP-only, upstream-identical behaviour ([#4](https://github.com/aughtone/aughtone-phonenumber/issues/2)).
+- `parse()` detects the leading international `+` by a deterministic code-point scan rather than `trim()` / `Char.isWhitespace()`, so classification is identical on every target. Input with leading non-digit characters before a `+` (e.g. `tel:+1…`) is now treated as international ([#2](https://github.com/aughtone/aughtone-phonenumber/issues/2)).
+- `NumberParseException` messages are fixed strings and no longer contain the input value, so logging a failed parse cannot leak a phone number; the exception constructor is now internal ([#1](https://github.com/aughtone/aughtone-phonenumber/issues/2)).
+
+### Verified
+- Ground-truth against libphonenumber Java **9.0.39**: identical E.164 and `isValid` agreement.
+- Zero output drift versus 9.0.38 across the conformance corpus (same inputs → same E.164 and validity).
+- Cross-target conformance passes byte-identically on JVM, JS, wasmJs, macOS (native), and iOS simulator.
+
 ## [0.0.1] - 2026-09-06
 
 First release. A pure Kotlin Multiplatform port of Google's [libphonenumber](https://github.com/google/libphonenumber) focused on byte-stable phone→E.164 normalization.
