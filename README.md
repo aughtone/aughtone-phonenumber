@@ -28,6 +28,52 @@ Upstream issues:
 - [KT-89187](https://youtrack.jetbrains.com/issue/KT-89187) — Kotlin/Native and Kotlin/Wasm: `Regex` fails to backtrack across unequal-length alternatives in a group (differs from JVM and Kotlin/JS). Filed by this project.
 - [KT-57906](https://youtrack.jetbrains.com/issue/KT-57906) — K/N: behaviour differs from JVM for regexes with backreferences (related; same non-JVM regex engine).
 
+## Compatibility with libphonenumber
+
+This is a port, so upstream libphonenumber is the reference. Where this library's `parse` behaviour differs, the difference is deliberate and listed here. Three differences make the port *more* correct or safer without changing the E.164 it produces for ordinary numbers; one upstream behaviour is deliberately **not** reproduced, and is called out so you know to handle it yourself.
+
+### Differences from upstream (safe by default)
+
+- **Parse errors never contain the input.** `NumberParseException` carries a machine-readable `ErrorType` and a fixed message string; it never interpolates the number or region into the message. Logging a failed parse cannot leak a phone number. (Upstream messages embed the offending value.)
+- **"+" detection is deterministic across targets.** Whether a number is treated as international is decided by scanning code points for the first `+` (ASCII `U+002B` or fullwidth `U+FF0B`) ahead of the first decimal digit — it does not call `String.trim()` or `Char.isWhitespace()`, whose tables vary by platform and Unicode version. The same input therefore classifies identically on every target.
+- **All Unicode decimal digits are recognised.** Digit normalization accepts every `General_Category=Nd` code point in a frozen Unicode table (see below), including supplementary (`> U+FFFF`) digits such as the mathematical bold digits. This is a strict superset of what upstream accepts: every input upstream normalizes, this normalizes to the same ASCII digits, and a few inputs upstream silently drops (supplementary-plane digits, because it reads one UTF-16 `char` at a time) are also handled. It accepts more input; it never changes the output for input upstream already accepted.
+
+The digit table is pinned to a specific Unicode version so the set of accepted digits is itself byte-stable and does not follow the runtime's Unicode version:
+
+- Frozen Unicode version: **17.0.0**, readable at runtime as `PhoneNumberUtil.digitUnicodeVersion`.
+
+### Opting into exact upstream digit behaviour
+
+If you need digit handling identical to libphonenumber — for example to reproduce its output bit-for-bit, including its dropping of supplementary-plane digits — pass `libphonenumberCompat = true`:
+
+```kotlin
+// Default: full Unicode 17.0.0 decimal digits (recommended).
+PhoneNumberUtil.parse(input, defaultRegion = "US")
+
+// Exact upstream digit behaviour: BMP digits only, supplementary digits stripped.
+PhoneNumberUtil.parse(input, defaultRegion = "US", libphonenumberCompat = true)
+```
+
+The flag is a per-call argument, defaulting to `false` (the more-correct behaviour). It is never a mutable global: output stays a pure function of `(input, defaultRegion, libphonenumberCompat)`, so nothing elsewhere in a process can change how a given call normalizes. `isValid` takes the same flag.
+
+The digit helpers are public for consumers that need the same frozen normalization without going through `parse`:
+
+```kotlin
+normalizeDigitsOnly("(650) 253-0000")        // "6502530000"
+decimalDigitValue('٥'.code)                   // 5  (Arabic-Indic five)
+DIGIT_UNICODE_VERSION                          // "17.0.0"
+```
+
+### One upstream behaviour deliberately not reproduced
+
+To avoid introducing a *new* divergence, `parse` does **not** perform three pieces of upstream input cleanup. It extracts only decimal digits (and the leading `+`); anything else is dropped rather than interpreted:
+
+- **Alphabetic vanity numbers are not converted** — upstream turns `1-800-FLOWERS` into `1-800-3569377`; this library reads the digits it contains and ignores the letters.
+- **Extensions are not parsed** — an `x123` / `ext. 123` suffix is not split off into a separate extension field; its digits are simply dropped along with the surrounding text.
+- **A second number is not truncated** — upstream cuts the input at the start of an apparent second number; this library does not.
+
+If your inputs may contain letters, extensions, or two numbers, normalise them before calling `parse`. This is tracked as a known difference rather than a bug.
+
 ## Features
 
 - **100% pure Kotlin** in `commonMain` — no `expect`/`actual` platform wrappers for the core.
@@ -63,12 +109,17 @@ import io.github.aughtone.phonenumber.PhoneNumberUtil
 val e164 = PhoneNumberUtil.parse("(650) 253-0000", defaultRegion = "US").formatToE164()
 println(e164) // +16502530000
 
-// Validate.
-val ok = PhoneNumberUtil.isValid("+16502530000") // true
+// Validate (a default region is always required).
+val ok = PhoneNumberUtil.isValid("+16502530000", defaultRegion = "US") // true
 
 // The metadata epoch that produced this output.
 println(PhoneNumberUtil.metadataVersion) // 9.0.38
+
+// The Unicode version of the frozen decimal-digit table (see Compatibility below).
+println(PhoneNumberUtil.digitUnicodeVersion) // 17.0.0
 ```
+
+See [Compatibility with libphonenumber](#compatibility-with-libphonenumber) for the `libphonenumberCompat` flag and the ways this port's `parse` differs from upstream.
 
 ## License
 
