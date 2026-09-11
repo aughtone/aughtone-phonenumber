@@ -29,7 +29,7 @@ public data class PhoneNumber internal constructor(
     val countryCode: Int,
     val nationalNumber: String,
 ) {
-    /** Canonical E.164, e.g. "+16502530000". Byte-stable within a metadata epoch. */
+    /** Canonical E.164, e.g. "+16502530000". Byte-stable within a released version. */
     public fun formatToE164(): String = "+$countryCode$nationalNumber"
 }
 
@@ -43,7 +43,7 @@ public data class PhoneNumber internal constructor(
  */
 public object PhoneNumberUtil {
 
-    /** The embedded libphonenumber metadata epoch (see [METADATA_VERSION]). */
+    /** The embedded libphonenumber metadata version (see [METADATA_VERSION]). */
     public val metadataVersion: String get() = METADATA_VERSION
 
     /** The Unicode version of the embedded decimal-digit table (see [DIGIT_UNICODE_VERSION]). */

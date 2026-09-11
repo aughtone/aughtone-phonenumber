@@ -3,11 +3,13 @@ namespace = "io.github.aughtone.phonenumber"
 group = "io.github.aughtone"
 versionName = "0.0.1"
 
-# Byte-stability epoch: the pinned libphonenumber metadata release this port
-# embeds. A bump here is a NEW normalization epoch, never an in-place change —
-# downstream freezes token output per epoch. Exposed at runtime as a readable
-# value. See docs/EPOCH.md.
-libphonenumberMetadata = "9.0.38"
+# The pinned libphonenumber metadata release this port embeds. The pin is a
+# change detector: bump it to adopt an upstream release only after confirming the
+# refresh changes no E.164 we already produce (new regions/ranges are fine); a
+# bump that would change existing output is a called-out breaking change. Exposed
+# at runtime via PhoneNumberUtil.metadataVersion. Keep in sync with
+# METADATA_VERSION in phonenumber's Metadata.kt (and the test dep below).
+libphonenumberMetadata = "9.0.39"
 
 android-minSdk = "24"
 android-compileSdk = "37"

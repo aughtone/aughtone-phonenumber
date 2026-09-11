@@ -4,19 +4,21 @@ A pure Kotlin Multiplatform (KMP) port of Google's [libphonenumber](https://gith
 
 > **Attribution:** This library is a Kotlin port of the original Java implementation maintained under Google's libphonenumber project. The parsing logic, formatting, validation, and the region metadata are derived from the [official google/libphonenumber repository](https://github.com/google/libphonenumber) and are used under the Apache License, Version 2.0. See [`NOTICE`](NOTICE) for the full attribution. This port is not affiliated with or endorsed by Google.
 
-> **Status:** Pre-1.0 — the `0.0.x` line is the alpha series. The public API described below is the contract we are building to and may change before `1.0`; the metadata epoch (below) is stable and its output will not change within a released version.
+> **Status:** Pre-1.0 — the `0.0.x` line is the alpha series. The public API described below is the contract we are building to and may change before `1.0`; the embedded metadata (below) is pinned and its output will not change within a released version.
 
 ### Why this lives outside Google's repository
 
 Google's libphonenumber does not take language ports into its main repository; community ports are published independently and maintained by their authors. This is one such independent port. Keeping it separate is the arrangement the project expects, not a fork around it.
 
-## The byte-stability epoch
+## Byte-stability and the pinned metadata version
 
-This port embeds a **pinned** slice of libphonenumber metadata and treats its version as a normalization **epoch**. Within a released version, the same input always canonicalizes to the same E.164 bytes — output is frozen. This matters for downstream consumers that derive stable tokens or anchors from the canonical form: a silent change in normalization would invalidate everything already derived.
+This port embeds a **pinned** slice of libphonenumber metadata. Within a released version, the same input always canonicalizes to the same E.164 bytes. This matters for downstream consumers that derive stable tokens or anchors from the canonical form: a silent change in normalization would invalidate everything already derived.
 
-- Embedded metadata version (current epoch): **9.0.38**
-- A metadata bump is a **new epoch** shipped as a new library version — never an in-place change within a version.
-- The epoch is readable at runtime (see Usage) so consumers can record which epoch produced a given value.
+The pin is a **change detector**, not a permanent freeze. libphonenumber ships metadata updates regularly, and we want the new regions and ranges. So each upstream release is adopted deliberately: we refresh the embedded metadata and re-run the full corpus, checking that **no E.164 we already produce changes**. New regions and wider ranges (input we did not accept before) come in freely; a change to an *existing* output is the one thing the refresh guards against, and is handled as a called-out, breaking change rather than shipped silently.
+
+- Embedded metadata version: **9.0.39**
+- A refresh that changes no existing output is a normal version bump; one that would change existing output is flagged in the release notes so consumers who derive stable tokens can decide when to adopt it.
+- The version is readable at runtime (see Usage) so consumers can record which metadata produced a given value.
 
 ## Why this ships its own regex matcher
 
@@ -78,7 +80,7 @@ If your inputs may contain letters, extensions, or two numbers, normalise them b
 
 - **100% pure Kotlin** in `commonMain` — no `expect`/`actual` platform wrappers for the core.
 - **Metadata embedded as Kotlin** — compiled into the binary on every target, with **no runtime resource loading** (the approach that lets wasmJs and native work where classpath/resource loading does not).
-- **Byte-stable, versioned output** — E.164 normalization is frozen per metadata epoch.
+- **Byte-stable, versioned output** — E.164 normalization is stable within a released version and refreshed only when existing output is unchanged.
 - **Multiplatform:** JVM, Android, iOS, macOS, tvOS, watchOS, Linux, MingW, JS, and wasmJs.
 
 ## Installation
@@ -112,8 +114,8 @@ println(e164) // +16502530000
 // Validate (a default region is always required).
 val ok = PhoneNumberUtil.isValid("+16502530000", defaultRegion = "US") // true
 
-// The metadata epoch that produced this output.
-println(PhoneNumberUtil.metadataVersion) // 9.0.38
+// The embedded metadata version that produced this output.
+println(PhoneNumberUtil.metadataVersion) // 9.0.39
 
 // The Unicode version of the frozen decimal-digit table (see Compatibility below).
 println(PhoneNumberUtil.digitUnicodeVersion) // 17.0.0

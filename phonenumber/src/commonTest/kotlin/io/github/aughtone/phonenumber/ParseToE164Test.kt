@@ -71,6 +71,6 @@ class ParseToE164Test {
 
     @Test
     fun metadataEpochExposed() {
-        assertEquals("9.0.38", PhoneNumberUtil.metadataVersion)
+        assertEquals("9.0.39", PhoneNumberUtil.metadataVersion)
     }
 }
