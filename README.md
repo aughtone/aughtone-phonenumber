@@ -89,7 +89,7 @@ If your inputs may contain letters, extensions, or two numbers, normalise them b
 
 ```kotlin
 dependencies {
-    implementation("io.github.aughtone:phonenumber:0.0.1")
+    implementation("io.github.aughtone:phonenumber:0.0.2")
 }
 ```
 
