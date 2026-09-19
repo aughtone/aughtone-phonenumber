@@ -6,6 +6,20 @@ A pure Kotlin Multiplatform (KMP) port of Google's [libphonenumber](https://gith
 
 > **Status:** Pre-1.0 — the `0.0.x` line is the alpha series. The public API described below is the contract we are building to and may change before `1.0`; the embedded metadata (below) is pinned and its output will not change within a released version.
 
+## Scope — what this port covers
+
+This is a port of libphonenumber's **number parsing, validation, and formatting** — the `PhoneNumberUtil` surface — and not the whole library. The boundary is deliberate and is recorded in [ADR-0001](docs/knowledge/decisions/ADR-0001-scope-of-the-libphonenumber-port.md).
+
+**Covered:** parsing (`+` international, IDD-dialed, and national forms) to a national significant number; formatting to canonical E.164; a validity check; and deterministic Unicode digit normalization. Extension parsing is in progress ([#5](https://github.com/aughtone/aughtone-phonenumber/issues/5)).
+
+**Not covered** — these libphonenumber features are intentionally out of scope; if you need one, it is not here:
+
+- **AsYouTypeFormatter** — live formatting as a user types.
+- **PhoneNumberMatcher / `findNumbers`** — finding phone numbers in free text.
+- **ShortNumberInfo** — emergency numbers and short codes.
+
+**The port contract.** With `libphonenumberCompat = true`, behaviour across the covered surface is byte-identical to upstream, and upstream's own tests for that surface pass. The default (`libphonenumberCompat = false`) may do the more-correct thing (see [Compatibility with libphonenumber](#compatibility-with-libphonenumber)) and is covered by this project's own tests. So: flip the flag and it *is* libphonenumber; leave it and it is libphonenumber-derived but improved — never silently different while claiming parity.
+
 ### Why this lives outside Google's repository
 
 Google's libphonenumber does not take language ports into its main repository; community ports are published independently and maintained by their authors. This is one such independent port. Keeping it separate is the arrangement the project expects, not a fork around it.

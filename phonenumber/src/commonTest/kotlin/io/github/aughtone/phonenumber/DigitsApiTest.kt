@@ -118,10 +118,18 @@ class DigitsApiTest {
     }
 
     @Test fun unknownRegionErrorDoesNotLeakInput() {
+        // A national-form number with an unknown region can't be parsed (the calling code is
+        // unknown) -> INVALID_COUNTRY_CODE, and the message must not echo the input or region.
         val e = assertFailsWith<PhoneNumberUtil.NumberParseException> {
-            PhoneNumberUtil.parse("+12015550123", "ZZ-secret-region")
+            PhoneNumberUtil.parse("2015550123", "ZZ-secret-region")
         }
-        assertEquals(PhoneNumberUtil.ErrorType.NOT_A_NUMBER, e.errorType)
+        assertEquals(PhoneNumberUtil.ErrorType.INVALID_COUNTRY_CODE, e.errorType)
         assertTrue(e.message?.contains("secret") != true, "message must not echo the region")
+        assertTrue(e.message?.contains("2015550123") != true, "message must not echo the input")
+    }
+
+    @Test fun plusNumberParsesEvenWithUnknownRegion() {
+        // A "+" number carries its own calling code, so an unknown region is fine (issue #13).
+        assertEquals("+12015550123", PhoneNumberUtil.parse("+12015550123", "ZZ-unknown").formatToE164())
     }
 }

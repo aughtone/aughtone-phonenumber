@@ -21,9 +21,9 @@
 package io.github.aughtone.phonenumber
 
 /**
- * The subset of libphonenumber's per-region metadata that this port's parser and
- * E.164 formatter need. The full model carries far more (per-type descriptors,
- * number formats, possible-length tables); those are added as the port grows.
+ * The subset of libphonenumber's per-region metadata that this port's parser,
+ * E.164 formatter, and length checks need. The full model carries more still
+ * (number-format templates); those are added as the port grows.
  *
  * Instances are produced by the metadata-generator from the pinned metadata XML
  * (see [METADATA_VERSION]) and embedded as Kotlin — no runtime resource loading.
@@ -49,4 +49,16 @@ internal data class PhoneMetadata(
     val leadingDigits: String?,
     /** Per-number-type national-number patterns (e.g. "fixedLine", "mobile"), whitespace stripped. */
     val typePatterns: Map<String, String>,
+    /**
+     * General possible national-number lengths, sorted ascending — the union of every type's
+     * lengths (libphonenumber's build computes the general desc this way). `[-1]` means no
+     * numbers exist for the region, which never matches a real length. Drives isPossibleNumber.
+     */
+    val possibleLengths: List<Int> = emptyList(),
+    /** General local-only lengths, sorted ascending, with any that are also national removed. */
+    val possibleLengthsLocalOnly: List<Int> = emptyList(),
+    /** Per-type national possible lengths, only where the XML states them explicitly (else fall back to general). */
+    val typePossibleLengths: Map<String, List<Int>> = emptyMap(),
+    /** Per-type local-only possible lengths, only where the XML states them explicitly. */
+    val typePossibleLengthsLocalOnly: Map<String, List<Int>> = emptyMap(),
 )
