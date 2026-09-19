@@ -147,6 +147,12 @@ public object PhoneNumberUtil {
         // the extension is carried on the result but never enters the E.164 form.
         val (main, extension) = stripExtension(built)
         var base = parseMain(main, defaultRegion, libphonenumberCompat, keepRawInput)
+        // #6 Durchwahl guard: in the default (correct) mode only, a hyphen/space-separated trailing
+        // group that upstream would silently fold into the national number is treated as ambiguous.
+        // Compat mode keeps upstream's folding; a recognised extension means there is nothing to guard.
+        if (!libphonenumberCompat && extension == null) {
+            base = resolveDurchwahlAmbiguity(main, base)
+        }
         if (extension != null) base = base.copy(extension = extension)
         if (keepRawInput) base = base.copy(rawInput = number)
         return base
@@ -231,6 +237,69 @@ public object PhoneNumberUtil {
             result = result.copy(countryCodeSource = extraction.source, preferredDomesticCarrierCode = carrierCode)
         }
         return validateLength(result)
+    }
+
+    /**
+     * The Durchwahl (direct-dial) ambiguity guard, applied in default mode only (#6). German/Austrian
+     * and similar numbers spell a direct-dial extension with a hyphen or space (`+49 30 12345678-12`);
+     * upstream — and this port's compat mode — fold those digits into the national number, producing a
+     * different, valid-looking number. Here, when the input carries a trailing digit group separated by
+     * formatting, we ask whether the number is valid both **with** and **without** that group:
+     *  - valid both ways → genuinely ambiguous → refuse (`NOT_A_NUMBER`) rather than invent a number;
+     *  - valid only without the group → resolve to the base number, keeping the group as the extension;
+     *  - otherwise → keep the folded number unchanged.
+     *
+     * This is a deliberate divergence from upstream (a variable-length dialling plan makes both readings
+     * valid, which upstream does not reason about); fixed-length plans (US, GB) are unaffected because the
+     * folded reading is invalid there. See ADR/issue #6.
+     */
+    private fun resolveDurchwahlAmbiguity(main: String, folded: PhoneNumber): PhoneNumber {
+        val trailingCount = trailingGroupDigitCount(main)
+        if (trailingCount <= 0) return folded
+        val nsn = folded.nationalNumber
+        if (trailingCount >= nsn.length) return folded // removing the group would leave nothing
+        val base = withItalianLeadingZeros(PhoneNumber(folded.countryCode, nsn.dropLast(trailingCount)))
+        val baseValid = isValidNumber(base)
+        if (!baseValid) return folded // the base isn't a number on its own, so nothing is ambiguous
+        if (isValidNumber(folded)) {
+            throw NumberParseException(
+                ErrorType.NOT_A_NUMBER,
+                "Ambiguous trailing group: the number is valid both with and without it",
+            )
+        }
+        // Folded form is invalid but the base is valid: the trailing group is the direct-dial extension.
+        return base.copy(extension = nsn.takeLast(trailingCount))
+    }
+
+    /**
+     * The number of digits in the final formatting-separated group of [main], or 0 when there is no
+     * such group (fewer than two digit runs). Used by [resolveDurchwahlAmbiguity]; counts Unicode
+     * decimal digits by code point so it is deterministic on every target.
+     */
+    private fun trailingGroupDigitCount(main: String): Int {
+        val part = extractPossibleNumber(main)
+        var runs = 0
+        var lastRunLen = 0
+        var inRun = false
+        var i = 0
+        while (i < part.length) {
+            val c = part[i]
+            val cp: Int
+            if (c.isHighSurrogate() && i + 1 < part.length && part[i + 1].isLowSurrogate()) {
+                cp = 0x10000 + ((c.code - 0xD800) shl 10) + (part[i + 1].code - 0xDC00)
+                i += 2
+            } else {
+                cp = c.code
+                i += 1
+            }
+            if (decimalDigitValue(cp) != null) {
+                if (!inRun) { inRun = true; runs++; lastRunLen = 0 }
+                lastRunLen++
+            } else {
+                inRun = false
+            }
+        }
+        return if (runs >= 2) lastRunLen else 0
     }
 
     /**
