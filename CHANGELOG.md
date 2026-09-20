@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`isSupportedRegion(regionCode)`** ([#21](https://github.com/aughtone/aughtone-phonenumber/issues/21)): an O(1) convenience that returns true only for a supported geographic region — the same set as `getSupportedRegions()`, excluding the non-geographical entity (`"001"`) and unknown codes. Prefer it over probing region validity with `parse("+…", region)`, which is not a region-validity test ([#13](https://github.com/aughtone/aughtone-phonenumber/issues/13)).
+
 ### Fixed
 - **Durchwahl guard no longer refuses ordinary space-grouped valid numbers** ([#22](https://github.com/aughtone/aughtone-phonenumber/issues/22)). 0.0.3's #6 ambiguity guard fired whenever a number was valid both with and without its last formatting-separated group; in a variable-length dialling plan the leading part of a normally-formatted number is frequently valid on its own, so ordinary numbers such as `+49 89 636 48018` (DE) were wrongly refused with `AMBIGUOUS_TRAILING_GROUP`. The guard is now narrowed to the actual Durchwahl signal — a **hyphen**-separated trailing group, or a whole number that is otherwise invalid; a space alone is not evidence. Hyphen cases are unchanged (`+49 30 12345678-12`, `+43 1 58058-0` still refuse; `+41 44 123 45 67-8` still resolves to extension `8`), and `formatToE164()` is unchanged for numbers that already parsed. Pass `libphonenumberCompat = true` to fold like upstream, as before.
 

@@ -635,6 +635,18 @@ public object PhoneNumberUtil {
     public fun getSupportedRegions(): Set<String> =
         GENERATED_METADATA.values.mapNotNull { if (it.id != REGION_CODE_FOR_NON_GEO_ENTITY) it.id else null }.toSet()
 
+    /**
+     * True if [regionCode] is a supported **geographic** region — one this library has metadata for.
+     * O(1) (a single metadata-key lookup). Excludes the non-geographical entity `"001"` and any unknown
+     * code (`"ZZ"`, `""`, garbage), so the result agrees exactly with membership in [getSupportedRegions].
+     * Region codes are the upper-case ISO 3166-1 alpha-2 codes used throughout this API; matching is
+     * case-sensitive, as elsewhere.
+     *
+     * Prefer this over probing with `parse("+…", regionCode)`: a `+`-prefixed number carries its own
+     * calling code and parses regardless of the region argument, so that is not a region-validity test.
+     */
+    public fun isSupportedRegion(regionCode: String): Boolean = isValidRegionCode(regionCode)
+
     /** All supported country calling codes (geographic and non-geographical). */
     public fun getSupportedCallingCodes(): Set<Int> = COUNTRY_CODE_TO_MAIN_REGION.keys.toSet()
 

@@ -130,6 +130,10 @@ println(e164) // +16502530000
 // Validate (a default region is always required).
 val ok = PhoneNumberUtil.isValid("+16502530000", defaultRegion = "US") // true
 
+// Check whether a region code is one this library knows (O(1)); the full set is getSupportedRegions().
+val known = PhoneNumberUtil.isSupportedRegion("US") // true
+val nope = PhoneNumberUtil.isSupportedRegion("ZZ")  // false
+
 // The embedded metadata version that produced this output.
 println(PhoneNumberUtil.metadataVersion) // 9.0.39
 
