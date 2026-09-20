@@ -159,12 +159,29 @@ public object PhoneNumberUtil {
         }
         // Split off a recognised extension (see stripExtension) before parsing the number itself;
         // the extension is carried on the result but never enters the E.164 form.
-        val (main, extension) = stripExtension(built, libphonenumberCompat)
+        val (main, strippedExtension) = stripExtension(built, libphonenumberCompat)
+        var extension = strippedExtension
         var base = parseMain(main, defaultRegion, libphonenumberCompat, keepRawInput)
-        // #6 Durchwahl guard: in the default (correct) mode only, a hyphen/space-separated trailing
-        // group that upstream would silently fold into the national number is treated as ambiguous.
-        // Compat mode keeps upstream's folding; a recognised extension means there is nothing to guard.
-        if (!libphonenumberCompat && extension == null) {
+        // #24 default mode: an "extension" whose digits actually belong to the number is re-folded. The
+        // American trailing-"#" form can take a subscriber group ("+1 212 555 0123#" → base +1212555,
+        // ext 0123); when the base is invalid without those digits but valid with them, they are folded
+        // back and no extension is reported. A genuine extension leaves a valid base, so this never
+        // touches "+1 212 555 0123 12#" (ext 12). Compat keeps upstream's split.
+        var resolvedByFold = false
+        if (!libphonenumberCompat && extension != null && !isValidNumber(base)) {
+            val folded = try {
+                parseMain(main + extension, defaultRegion, libphonenumberCompat, keepRawInput)
+            } catch (e: NumberParseException) { null }
+            if (folded != null && isValidNumber(folded)) {
+                base = folded
+                extension = null
+                resolvedByFold = true
+            }
+        }
+        // #6 Durchwahl guard: in the default (correct) mode only, a hyphen-separated trailing group that
+        // upstream would silently fold into the national number is treated as ambiguous. Compat mode keeps
+        // upstream's folding; a recognised extension (or a #24 re-fold) means there is nothing to guard.
+        if (!libphonenumberCompat && extension == null && !resolvedByFold) {
             base = resolveDurchwahlAmbiguity(main, base)
         }
         if (extension != null) base = base.copy(extension = extension)
@@ -1821,7 +1838,38 @@ public object PhoneNumberUtil {
             }
             i++
         }
+        // #23 default mode: a recognised explicit extension label with no digits after it (a dangling
+        // "… 0123 ext") is not a real extension, but left in place its letters keypad-fold into the
+        // number ("ext" → 398). Drop the dangling marker instead. Compat keeps upstream's fold.
+        if (!compat) {
+            val stripped = stripDanglingExtLabel(input, lower)
+            if (stripped != null && isViablePhoneNumber(stripped)) return stripped to null
+        }
         return input to null
+    }
+
+    /**
+     * If [s] ends with a recognised explicit extension label — preceded by a separator and followed only
+     * by separators, with no digits — return [s] with that dangling marker removed; otherwise null. Only
+     * the unambiguous explicit labels (`ext`, `extn`, `extension`, …) qualify, so ordinary vanity letters
+     * are never stripped. Used in the default mode only ([stripExtension]).
+     */
+    private fun stripDanglingExtLabel(s: String, lower: String): String? {
+        for (start in s.indices) {
+            if (start == 0 || !(isExtSep(s[start - 1]) || s[start - 1] == '-')) continue
+            for (label in EXPLICIT_EXT_LABELS) {
+                if (!lower.startsWith(label, start)) continue
+                var k = start + label.length
+                if (k < s.length && (s[k] == ':' || s[k] == '.' || s[k] == '．')) k++
+                while (k < s.length && (isExtSep(s[k]) || s[k] == '-')) k++
+                if (k == s.length) {
+                    var p = start
+                    while (p > 0 && (isExtSep(s[p - 1]) || s[p - 1] == '-')) p--
+                    return s.substring(0, p)
+                }
+            }
+        }
+        return null
     }
 
     private fun extensionAt(s: String, lower: String, start: Int, compat: Boolean): String? {
