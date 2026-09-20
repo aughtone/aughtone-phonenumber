@@ -31,6 +31,10 @@ Completes the parse / validate / format port ([#7](https://github.com/aughtone/a
 - `formatToE164()` output unchanged versus 0.0.2 for every conformance-corpus example.
 - Cross-target byte-stability (parse and format) on JVM, JS, wasmJs, macOS (native), and iOS simulator.
 
+### Upgrading from 0.0.2
+- `ErrorType` gained four members (`TOO_SHORT_AFTER_IDD`, `TOO_SHORT_NSN`, `TOO_LONG`, `AMBIGUOUS_TRAILING_GROUP`). A Kotlin `when` over `ErrorType` that was exhaustive will stop compiling until the new branches (or an `else`) are added — intentional, so each new failure mode is handled deliberately rather than swallowed.
+- To test whether a region code is supported, use `getSupportedRegions()` (or `getCountryCodeForRegion(region)`, which returns 0 for an unknown region). Do **not** probe with `parse("+…", region)`: a `+`-prefixed number carries its own calling code and parses regardless of the region argument ([#13](https://github.com/aughtone/aughtone-phonenumber/issues/13)), so it is not a region-validity test — in 0.0.2 it happened to throw for an unusable region, and no longer does.
+
 ## [0.0.2] - 2026-09-11
 
 Aligns three `parse()` behaviours with upstream libphonenumber and refreshes the embedded metadata to 9.0.39. A few edge inputs now normalize differently — consumers that derive stable tokens from the E.164 output should review **Changed** before adopting.
