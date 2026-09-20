@@ -178,11 +178,24 @@ public object PhoneNumberUtil {
                 resolvedByFold = true
             }
         }
-        // #6 Durchwahl guard: in the default (correct) mode only, a hyphen-separated trailing group that
-        // upstream would silently fold into the national number is treated as ambiguous. Compat mode keeps
-        // upstream's folding; a recognised extension (or a #24 re-fold) means there is nothing to guard.
-        if (!libphonenumberCompat && extension == null && !resolvedByFold) {
-            base = resolveDurchwahlAmbiguity(main, base)
+        // #6/#22/#25 Durchwahl guard: in the default (correct) mode only, a hyphen-separated trailing
+        // group that upstream would silently fold into the national number is treated as ambiguous. The
+        // ambiguity is a property of the number, not of a trailing extension, so the guard runs on `main`
+        // whether or not an extension was stripped (#25) — e.g. "+43 1 58058-0#4" refuses just like
+        // "+43 1 58058-0". Compat mode keeps upstream's folding; a #24 re-fold has already settled the
+        // number, so there is nothing to guard.
+        if (!libphonenumberCompat && !resolvedByFold) {
+            val guarded = resolveDurchwahlAmbiguity(main, base) // may throw AMBIGUOUS_TRAILING_GROUP
+            base = if (extension == null || guarded.extension == null) {
+                // No explicit extension, or the guard kept the number folded — take its result (which,
+                // with no explicit extension, may itself promote the trailing group to the extension).
+                guarded
+            } else {
+                // #25 collision: the guard would promote the trailing group to an extension, but an
+                // explicit extension is already present (a malformed "…-123456#4"). Keep the explicit
+                // extension (attached below) and the folded number rather than double-assigning.
+                base
+            }
         }
         if (extension != null) base = base.copy(extension = extension)
         if (keepRawInput) base = base.copy(rawInput = number)

@@ -64,6 +64,33 @@ class DurchwahlTest {
         assertEquals("8", ch.extension)
     }
 
+    @Test fun durchwahlWithExtensionStillRefusesInDefaultMode() {
+        // #25 — the ambiguity is a property of the number, not of a trailing extension, so a Durchwahl
+        // number that also carries an extension marker must refuse exactly like the bare form.
+        for ((input, region) in listOf(
+            "+43 1 58058-0#4" to "AT",   // Austrian Durchwahl + a "#4" extension
+            "+49 30 12345678-12#7" to "DE", // German Durchwahl + a "#7" extension
+        )) {
+            val e = assertFailsWith<PhoneNumberUtil.NumberParseException>(input) { parse(input, region) }
+            assertEquals(PhoneNumberUtil.ErrorType.AMBIGUOUS_TRAILING_GROUP, e.errorType, input)
+        }
+        // Compat folds like upstream and keeps the explicit extension (no guard).
+        val at = parse("+43 1 58058-0#4", "AT", compat = true)
+        assertEquals("+431580580", at.formatToE164())
+        assertEquals("4", at.extension)
+    }
+
+    @Test fun ordinaryExtensionsAreUnaffectedByTheGuard() {
+        // #25 controls — a genuine extension on a non-ambiguous number is untouched in default mode.
+        val us = parse("+1 212 555 0123 x12", "US")
+        assertEquals("+12125550123", us.formatToE164())
+        assertEquals("12", us.extension)
+        // The #22 space-grouped valid number, now with an extension, still parses (space is not a signal).
+        val de = parse("+49 89 636 48018 x5", "DE")
+        assertEquals("+498963648018", de.formatToE164())
+        assertEquals("5", de.extension)
+    }
+
     @Test fun ordinaryNumbersAreUnaffected() {
         // No trailing-group ambiguity: a plainly formatted number still parses in default mode.
         assertEquals("+493012345678", parse("+49 30 12345678", "DE").formatToE164())
