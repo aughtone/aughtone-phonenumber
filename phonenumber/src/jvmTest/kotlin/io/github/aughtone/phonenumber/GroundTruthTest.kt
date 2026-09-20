@@ -49,13 +49,17 @@ class GroundTruthTest {
             )) {
                 val dialed = ref.format(example, fmt)
                 tested++
-                val mine = runCatching { PhoneNumberUtil.parse(dialed, region).formatToE164() }
+                // Compat mode is the parity anchor: the default mode may intentionally diverge from
+                // upstream (e.g. the #6 Durchwahl ambiguity guard refuses some hyphen/space-separated
+                // trailing groups that upstream folds). This test asserts we MATCH the reference, so it
+                // runs in compat mode; the default-mode divergences are covered by their own tests.
+                val mine = runCatching { PhoneNumberUtil.parse(dialed, region, libphonenumberCompat = true).formatToE164() }
                     .getOrElse { "EXCEPTION(${it::class.simpleName}: ${it.message})" }
                 if (mine != refE164) {
                     failures += "$region [$fmt] \"$dialed\": mine=$mine ref=$refE164"
                 }
                 // isValid must agree with the reference (examples are valid).
-                val myValid = runCatching { PhoneNumberUtil.isValid(dialed, region) }.getOrDefault(false)
+                val myValid = runCatching { PhoneNumberUtil.isValid(dialed, region, libphonenumberCompat = true) }.getOrDefault(false)
                 if (!myValid) failures += "$region [$fmt] \"$dialed\": isValid=false, ref valid"
             }
         }
@@ -80,7 +84,7 @@ class GroundTruthTest {
             for (variant in variants) {
                 val e164 = "+$cc$variant"
                 val refValid = runCatching { ref.isValidNumber(ref.parse(e164, region)) }.getOrDefault(false)
-                val myValid = runCatching { PhoneNumberUtil.isValid(e164, region) }.getOrDefault(false)
+                val myValid = runCatching { PhoneNumberUtil.isValid(e164, region, libphonenumberCompat = true) }.getOrDefault(false)
                 tested++
                 if (myValid != refValid) failures += "$region \"$e164\": mine=$myValid ref=$refValid"
             }

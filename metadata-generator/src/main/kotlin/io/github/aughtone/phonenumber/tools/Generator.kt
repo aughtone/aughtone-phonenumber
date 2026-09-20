@@ -39,6 +39,15 @@ private val TYPES = listOf(
     "personalNumber", "voip", "pager", "uan", "voicemail",
 )
 
+private data class Nf(
+    val pattern: String,
+    val format: String,
+    val leadingDigits: List<String>,
+    val nationalPrefixFormattingRule: String?,
+    val nationalPrefixOptionalWhenFormatting: Boolean,
+    val domesticCarrierCodeFormattingRule: String?,
+)
+
 private data class Region(
     val id: String,
     val countryCode: Int,
@@ -50,6 +59,17 @@ private data class Region(
     val generalPattern: String,
     val leadingDigits: String?,
     val typePatterns: Map<String, String>,
+    val possibleLengths: List<Int>,
+    val possibleLengthsLocalOnly: List<Int>,
+    val typePossibleLengths: Map<String, List<Int>>,
+    val typePossibleLengthsLocalOnly: Map<String, List<Int>>,
+    val numberFormats: List<Nf>,
+    val intlNumberFormats: List<Nf>,
+    val preferredExtnPrefix: String?,
+    val preferredInternationalPrefix: String?,
+    val noInternationalDialling: String?,
+    val mobileNumberPortableRegion: Boolean,
+    val typeExampleNumbers: Map<String, String>,
     val exampleNumber: String?,
 )
 
@@ -80,6 +100,39 @@ fun main(args: Array<String>) {
         }
         val typePatterns = LinkedHashMap<String, String>()
         for (type in TYPES) typePattern(t, type)?.let { typePatterns[type] = it }
+
+        val typeExampleNumbers = LinkedHashMap<String, String>()
+        for (type in TYPES) {
+            firstChild(t, type)?.let { firstChild(it, "exampleNumber")?.textContent }
+                ?.let(::stripWhitespace)?.ifEmpty { null }?.let { typeExampleNumbers[type] = it }
+        }
+
+        // Possible-length tables. Each type descriptor may carry <possibleLengths national=".."
+        // localOnly=".."/>; the general desc almost never does, so we compute it as the union of
+        // the type lengths, exactly as libphonenumber's build tool does.
+        val typeLengths = LinkedHashMap<String, List<Int>>()
+        val typeLocalLengths = LinkedHashMap<String, List<Int>>()
+        for (type in TYPES) {
+            val el = firstChild(t, type) ?: continue
+            val pl = firstChild(el, "possibleLengths") ?: continue
+            parseLengths(pl.attrOrNull("national")).takeIf { it.isNotEmpty() }?.let { typeLengths[type] = it }
+            parseLengths(pl.attrOrNull("localOnly")).takeIf { it.isNotEmpty() }?.let { typeLocalLengths[type] = it }
+        }
+        val explicitGeneral = firstChild(t, "generalDesc")?.let { firstChild(it, "possibleLengths") }
+        val generalLengths: List<Int>
+        val generalLocalLengths: List<Int>
+        if (explicitGeneral != null) {
+            generalLengths = parseLengths(explicitGeneral.attrOrNull("national"))
+            generalLocalLengths = parseLengths(explicitGeneral.attrOrNull("localOnly"))
+                .filterNot { it in generalLengths }
+        } else {
+            generalLengths = typeLengths.values.flatten().toSortedSet().toList()
+            generalLocalLengths = typeLocalLengths.values.flatten().toSortedSet()
+                .filterNot { it in generalLengths }
+        }
+
+        val (numberFormats, intlNumberFormats) = parseNumberFormats(t)
+
         regions += Region(
             id = id,
             countryCode = ccStr.toInt(),
@@ -91,6 +144,17 @@ fun main(args: Array<String>) {
             generalPattern = generalPattern,
             leadingDigits = t.attrOrNull("leadingDigits")?.let(::stripWhitespace),
             typePatterns = typePatterns,
+            possibleLengths = generalLengths,
+            possibleLengthsLocalOnly = generalLocalLengths,
+            typePossibleLengths = typeLengths,
+            typePossibleLengthsLocalOnly = typeLocalLengths,
+            numberFormats = numberFormats,
+            intlNumberFormats = intlNumberFormats,
+            preferredExtnPrefix = t.attrOrNull("preferredExtnPrefix"),
+            preferredInternationalPrefix = t.attrOrNull("preferredInternationalPrefix")?.let(::stripWhitespace),
+            noInternationalDialling = typePattern(t, "noInternationalDialling"),
+            mobileNumberPortableRegion = t.getAttribute("mobileNumberPortableRegion") == "true",
+            typeExampleNumbers = typeExampleNumbers,
             exampleNumber = exampleFor(t),
         )
     }
@@ -137,23 +201,49 @@ private fun writeMetadata(
     sb.appendLine("// Produced by :metadata-generator from the pinned libphonenumber metadata XML.")
     sb.appendLine("// The embedded epoch is recorded in METADATA_VERSION. Regions: ${byId.size}.")
     sb.appendLine()
+    // Split the puts across several functions so no single method exceeds the JVM's 64KB
+    // bytecode limit (the whole map in one initializer overflows `<clinit>`). Each chunk is its
+    // own function; the property initializer just calls them.
+    val entries = byId.entries.toList()
+    // Small chunks: with display-format templates embedded, a region's initializer is much larger,
+    // so few-per-function keeps each `fillMetadataN` well under the JVM's 64KB bytecode limit.
+    val chunkSize = 5
+    val chunkCount = (entries.size + chunkSize - 1) / chunkSize
     sb.appendLine("internal val GENERATED_METADATA: Map<String, PhoneMetadata> = buildMap {")
-    for ((key, r) in byId) {
-        sb.append("    put(").append(kstr(key)).append(", PhoneMetadata(")
-        sb.append("id = ").append(kstr(r.id))
-        sb.append(", countryCode = ").append(r.countryCode)
-        sb.append(", mainCountryForCode = ").append(r.mainCountryForCode)
-        sb.append(", internationalPrefix = ").append(knull(r.internationalPrefix))
-        sb.append(", nationalPrefix = ").append(knull(r.nationalPrefix))
-        sb.append(", nationalPrefixForParsing = ").append(knull(r.nationalPrefixForParsing))
-        sb.append(", nationalPrefixTransformRule = ").append(knull(r.nationalPrefixTransformRule))
-        sb.append(", generalNationalNumberPattern = ").append(kstr(r.generalPattern))
-        sb.append(", leadingDigits = ").append(knull(r.leadingDigits))
-        sb.append(", typePatterns = ").append(typeMap(r.typePatterns))
-        sb.appendLine("))")
-    }
+    for (i in 0 until chunkCount) sb.appendLine("    fillMetadata$i(this)")
     sb.appendLine("}")
     sb.appendLine()
+    for (i in 0 until chunkCount) {
+        sb.appendLine("private fun fillMetadata$i(m: MutableMap<String, PhoneMetadata>) {")
+        for (j in i * chunkSize until minOf((i + 1) * chunkSize, entries.size)) {
+            val (key, r) = entries[j]
+            sb.append("    m.put(").append(kstr(key)).append(", PhoneMetadata(")
+            sb.append("id = ").append(kstr(r.id))
+            sb.append(", countryCode = ").append(r.countryCode)
+            sb.append(", mainCountryForCode = ").append(r.mainCountryForCode)
+            sb.append(", internationalPrefix = ").append(knull(r.internationalPrefix))
+            sb.append(", nationalPrefix = ").append(knull(r.nationalPrefix))
+            sb.append(", nationalPrefixForParsing = ").append(knull(r.nationalPrefixForParsing))
+            sb.append(", nationalPrefixTransformRule = ").append(knull(r.nationalPrefixTransformRule))
+            sb.append(", generalNationalNumberPattern = ").append(kstr(r.generalPattern))
+            sb.append(", leadingDigits = ").append(knull(r.leadingDigits))
+            sb.append(", typePatterns = ").append(typeMap(r.typePatterns))
+            sb.append(", possibleLengths = ").append(intList(r.possibleLengths))
+            sb.append(", possibleLengthsLocalOnly = ").append(intList(r.possibleLengthsLocalOnly))
+            sb.append(", typePossibleLengths = ").append(lengthMap(r.typePossibleLengths))
+            sb.append(", typePossibleLengthsLocalOnly = ").append(lengthMap(r.typePossibleLengthsLocalOnly))
+            sb.append(", numberFormats = ").append(nfList(r.numberFormats))
+            sb.append(", intlNumberFormats = ").append(nfList(r.intlNumberFormats))
+            sb.append(", preferredExtnPrefix = ").append(knull(r.preferredExtnPrefix))
+            sb.append(", preferredInternationalPrefix = ").append(knull(r.preferredInternationalPrefix))
+            sb.append(", noInternationalDialling = ").append(knull(r.noInternationalDialling))
+            sb.append(", mobileNumberPortableRegion = ").append(r.mobileNumberPortableRegion)
+            sb.append(", typeExampleNumbers = ").append(typeMap(r.typeExampleNumbers))
+            sb.appendLine("))")
+        }
+        sb.appendLine("}")
+        sb.appendLine()
+    }
     sb.appendLine("internal val COUNTRY_CODE_TO_MAIN_REGION: Map<Int, String> = buildMap {")
     for ((cc, region) in ccToMain) sb.appendLine("    put($cc, ${kstr(region)})")
     sb.appendLine("}")
@@ -191,6 +281,81 @@ private fun writeExamples(dir: File, mainRegionByCc: Map<Int, Region>): Int {
     return examples.size
 }
 
+/**
+ * Parse a territory's `<availableFormats>` into (nationalFormats, intlFormats), faithfully porting
+ * libphonenumber's `BuildMetadataFromXml.loadAvailableFormats` / `loadInternationalFormat`:
+ *  - `$NP`/`$FG` in the national-prefix rule and `$FG`/`$NP` in the carrier rule are expanded here.
+ *  - each `<numberFormat>` inherits the territory-level prefix / carrier / optional-when-formatting
+ *    rules unless it overrides them.
+ *  - the intl list mirrors the national list, but a format defaults to the national one when it has
+ *    no `<intlFormat>`, is dropped when its `<intlFormat>` is "NA", and the whole intl list is
+ *    cleared when no format defined an explicit `<intlFormat>` (the common case).
+ */
+private fun parseNumberFormats(t: Element): Pair<List<Nf>, List<Nf>> {
+    val available = firstChild(t, "availableFormats") ?: return emptyList<Nf>() to emptyList()
+    val nationalPrefix = t.attrOrNull("nationalPrefix") ?: ""
+
+    val territoryNpf = t.attrOrNull("nationalPrefixFormattingRule")?.let { expandNpRule(it, nationalPrefix) }
+    val territoryNpOpt = t.getAttribute("nationalPrefixOptionalWhenFormatting") == "true"
+    val territoryCarrier = t.attrOrNull("carrierCodeFormattingRule")?.let { expandCarrierRule(it, nationalPrefix) }
+
+    val nodes = available.getElementsByTagName("numberFormat")
+    val national = mutableListOf<Nf>()
+    val intl = mutableListOf<Nf>()
+    var hasExplicitIntl = false
+    for (i in 0 until nodes.length) {
+        val nfe = nodes.item(i) as Element
+        val pattern = stripWhitespace(nfe.getAttribute("pattern"))
+        val format = firstChild(nfe, "format")?.textContent?.trim() ?: continue
+        val leadingDigits = leadingDigitsOf(nfe)
+        val npf = if (nfe.hasAttribute("nationalPrefixFormattingRule")) {
+            expandNpRule(nfe.getAttribute("nationalPrefixFormattingRule"), nationalPrefix)
+        } else {
+            territoryNpf
+        }
+        val npOpt = if (nfe.hasAttribute("nationalPrefixOptionalWhenFormatting")) {
+            nfe.getAttribute("nationalPrefixOptionalWhenFormatting") == "true"
+        } else {
+            territoryNpOpt
+        }
+        val carrier = if (nfe.hasAttribute("carrierCodeFormattingRule")) {
+            expandCarrierRule(nfe.getAttribute("carrierCodeFormattingRule"), nationalPrefix)
+        } else {
+            territoryCarrier
+        }
+        val nat = Nf(pattern, format, leadingDigits, npf?.ifEmpty { null }, npOpt, carrier?.ifEmpty { null })
+        national += nat
+
+        // International format for this entry.
+        val intlNodes = nfe.getElementsByTagName("intlFormat")
+        if (intlNodes.length == 0) {
+            intl += nat // defaults to the national format (national-prefix rule is unused for intl)
+        } else {
+            hasExplicitIntl = true
+            val intlText = (intlNodes.item(0) as Element).textContent.trim()
+            if (intlText != "NA") {
+                intl += Nf(pattern, intlText, leadingDigits, null, false, null)
+            }
+        }
+    }
+    return national to (if (hasExplicitIntl) intl else emptyList())
+}
+
+private fun leadingDigitsOf(nfe: Element): List<String> {
+    val nodes = nfe.getElementsByTagName("leadingDigits")
+    val out = mutableListOf<String>()
+    for (i in 0 until nodes.length) out += stripWhitespace((nodes.item(i) as Element).textContent)
+    return out
+}
+
+/** Expand a national-prefix formatting rule: `$NP` → national prefix, `$FG` → `$1` (upstream order). */
+private fun expandNpRule(raw: String, nationalPrefix: String): String =
+    raw.replaceFirst("\$NP", nationalPrefix).replaceFirst("\$FG", "\$1")
+
+/** Expand a carrier-code formatting rule: `$FG` → `$1`, `$NP` → national prefix (upstream order). */
+private fun expandCarrierRule(raw: String, nationalPrefix: String): String =
+    raw.replaceFirst("\$FG", "\$1").replaceFirst("\$NP", nationalPrefix)
+
 /** national-number pattern text of a child descriptor (e.g. "fixedLine"), whitespace stripped. */
 private fun typePattern(t: Element, type: String): String? =
     firstChild(t, type)
@@ -213,6 +378,49 @@ private fun Element.attrOrNull(name: String): String? =
     if (hasAttribute(name)) getAttribute(name) else null
 
 private fun stripWhitespace(s: String): String = s.filterNot { it.isWhitespace() }
+
+/**
+ * Parse a libphonenumber possibleLengths spec — comma-separated tokens, each either a single
+ * length ("10") or an inclusive range ("[6-8]") — into a sorted, distinct list of ints.
+ */
+private fun parseLengths(spec: String?): List<Int> {
+    if (spec.isNullOrEmpty()) return emptyList()
+    val out = sortedSetOf<Int>()
+    for (token in spec.split(",")) {
+        val t = token.trim()
+        if (t.isEmpty()) continue
+        if (t.startsWith("[") && t.endsWith("]")) {
+            val (lo, hi) = t.substring(1, t.length - 1).split("-").map { it.trim().toInt() }
+            for (n in lo..hi) out.add(n)
+        } else {
+            out.add(t.toInt())
+        }
+    }
+    return out.toList()
+}
+
+private fun intList(xs: List<Int>): String =
+    if (xs.isEmpty()) "emptyList()" else "listOf(${xs.joinToString(", ")})"
+
+private fun strList(xs: List<String>): String =
+    if (xs.isEmpty()) "emptyList()" else "listOf(${xs.joinToString(", ") { kstr(it) }})"
+
+private fun nfList(xs: List<Nf>): String =
+    if (xs.isEmpty()) {
+        "emptyList()"
+    } else {
+        "listOf(" + xs.joinToString(", ") { nf ->
+            "NumberFormat(pattern = ${kstr(nf.pattern)}, format = ${kstr(nf.format)}, " +
+                "leadingDigitsPatterns = ${strList(nf.leadingDigits)}, " +
+                "nationalPrefixFormattingRule = ${knull(nf.nationalPrefixFormattingRule)}, " +
+                "nationalPrefixOptionalWhenFormatting = ${nf.nationalPrefixOptionalWhenFormatting}, " +
+                "domesticCarrierCodeFormattingRule = ${knull(nf.domesticCarrierCodeFormattingRule)})"
+        } + ")"
+    }
+
+private fun lengthMap(m: Map<String, List<Int>>): String =
+    if (m.isEmpty()) "emptyMap()"
+    else "mapOf(" + m.entries.joinToString(", ") { "${kstr(it.key)} to ${intList(it.value)}" } + ")"
 
 /** Kotlin string literal with the escapes that matter inside a double-quoted string. */
 private fun kstr(s: String): String {

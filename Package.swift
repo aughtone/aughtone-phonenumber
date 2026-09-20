@@ -17,7 +17,7 @@ let package = Package(
     targets: [
         .binaryTarget(
             name: "AOPhoneNumberKit",
-            url: "https://github.com/aughtone/aughtone-phonenumber/releases/download/v0.0.2/AOPhoneNumberKit.xcframework.zip",
+            url: "https://github.com/aughtone/aughtone-phonenumber/releases/download/v0.0.3/AOPhoneNumberKit.xcframework.zip",
             checksum: "d38a96168cecbbcac510edd9b48952e78a575eaabed884c28a6c9c85e7e8b4e5"
         )
     ]
