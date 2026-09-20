@@ -209,7 +209,7 @@ mavenPublishing {
         developers {
             developer {
                 id = "bpappin"
-                name = "Brill pappin"
+                name = "bpappin"
                 url = "https://github.com/bpappin"
             }
         }

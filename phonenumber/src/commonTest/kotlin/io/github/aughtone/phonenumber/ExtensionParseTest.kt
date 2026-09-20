@@ -17,6 +17,7 @@ package io.github.aughtone.phonenumber
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 
 /** #5 extension parsing, cross-target (deterministic expected values; no reference needed). */
@@ -47,6 +48,39 @@ class ExtensionParseTest {
         val hashed = parse("03 3316005 #123456789#", "NZ")
         assertEquals("+6433316005", hashed.formatToE164())
         assertEquals("123456789", hashed.extension)
+    }
+
+    @Test fun nonAsciiExtensionDigitsFoldToAscii() {
+        // Arabic-Indic and Devanagari extension digits are recognised and folded to ASCII, so the
+        // extension is byte-stable across scripts (a deliberate divergence from upstream, which keeps
+        // the raw characters). Without this, "ext ٤" would fall through to vanity conversion and fold
+        // into the national number. Both modes fold; the extension is never part of the E.164.
+        val arabicIndic = parse("+1 212 555 0123 ext ٤", "US") // ٤ = 4
+        assertEquals("+12125550123", arabicIndic.formatToE164())
+        assertEquals("4", arabicIndic.extension)
+
+        val devanagari = parse("03 3316005 x २३", "NZ") // २३ = 23
+        assertEquals("+6433316005", devanagari.formatToE164())
+        assertEquals("23", devanagari.extension)
+
+        val compat = PhoneNumberUtil.parse("+1 212 555 0123 ext ٤", "US", libphonenumberCompat = true)
+        assertEquals("+12125550123", compat.formatToE164())
+        assertEquals("4", compat.extension)
+    }
+
+    @Test fun supplementaryExtensionDigitsFollowTheModeSplit() {
+        // U+1D7D2 MATHEMATICAL BOLD DIGIT FOUR — a supplementary-plane Nd digit.
+        val bold4 = "𝟒"
+        // Default mode folds every Nd block, including supplementary, exactly like the national number.
+        val def = parse("+1 212 555 0123 ext $bold4", "US")
+        assertEquals("+12125550123", def.formatToE164())
+        assertEquals("4", def.extension)
+        // Compat mode is BMP-only (matching the number): the supplementary digit is not folded into
+        // the extension.
+        val compatExt = runCatching {
+            PhoneNumberUtil.parse("+1 212 555 0123 ext $bold4", "US", libphonenumberCompat = true).extension
+        }.getOrNull()
+        assertNotEquals("4", compatExt)
     }
 
     @Test fun carrierCodeIsNotAnExtension() {
