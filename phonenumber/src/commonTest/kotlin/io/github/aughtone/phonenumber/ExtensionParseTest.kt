@@ -45,9 +45,11 @@ class ExtensionParseTest {
         assertEquals("+18009013355", us.formatToE164())
         assertEquals("7246433", us.extension)
 
+        // A "#…#" sequence is a post-dial string (DTMF), not an extension (#30, ADR-0003).
         val hashed = parse("03 3316005 #123456789#", "NZ")
         assertEquals("+6433316005", hashed.formatToE164())
-        assertEquals("123456789", hashed.extension)
+        assertEquals("123456789", hashed.postDialString)
+        assertNull(hashed.extension)
     }
 
     @Test fun nonAsciiExtensionDigitsFoldToAscii() {

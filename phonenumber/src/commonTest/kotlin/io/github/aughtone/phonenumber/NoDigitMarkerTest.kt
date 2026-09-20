@@ -67,10 +67,12 @@ class NoDigitMarkerTest {
     // --- Controls: genuine extensions and the sane single-char marker are unaffected ------------
 
     @Test fun genuineExtensionsAreUnaffected() {
-        // A real American "#" extension: base is valid without "12", so "12" stays the extension.
+        // The American "#" form is a post-dial string, not an extension (#30, ADR-0003) — the number is
+        // still correct and the digits are captured, just in the right field.
         assertEquals("+12125550123", e164("+1 212 555 0123 12#"))
-        assertEquals("12", ext("+1 212 555 0123 12#"))
-        // A real labelled extension.
+        assertEquals("12", PhoneNumberUtil.parse("+1 212 555 0123 12#", "US").postDialString)
+        assertNull(ext("+1 212 555 0123 12#"))
+        // A real labelled extension is unchanged.
         assertEquals("+12125550123", e164("+1 212 555 0123 x123"))
         assertEquals("123", ext("+1 212 555 0123 x123"))
         // Single-char "x" with no digits was already fine (not vanity, not a subscriber group).
