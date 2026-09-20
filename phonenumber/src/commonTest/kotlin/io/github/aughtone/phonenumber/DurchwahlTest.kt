@@ -35,9 +35,10 @@ class DurchwahlTest {
         PhoneNumberUtil.parse(number, region, libphonenumberCompat = compat)
 
     @Test fun ambiguousTrailingGroupIsRefusedInDefaultMode() {
+        // Only a HYPHEN-separated trailing group (the Durchwahl convention) on an otherwise-valid
+        // number is treated as ambiguous — a space alone is not evidence (see [ordinaryNumbersAreUnaffected]).
         for ((input, region) in listOf(
             "+49 30 12345678-12" to "DE", // hyphen (Durchwahl)
-            "+49 30 12345678 12" to "DE", // space
             "+43 1 58058-0" to "AT", // Austrian Durchwahl
         )) {
             val e = assertFailsWith<PhoneNumberUtil.NumberParseException>(input) { parse(input, region) }
@@ -52,16 +53,24 @@ class DurchwahlTest {
     }
 
     @Test fun unambiguousTrailingGroupResolvesToBase() {
-        // The folded reading is too long to be valid, but the base is a valid Berlin number, so the
-        // trailing group is taken as the direct-dial extension.
+        // Hyphen-separated, folded reading too long to be valid but the base valid → trailing group is
+        // the direct-dial extension.
         val n = parse("+49 30 12345678-123456", "DE")
         assertEquals("+493012345678", n.formatToE164())
         assertEquals("123456", n.extension)
+        // Same shape via a shorter hyphen group (Swiss).
+        val ch = parse("+41 44 123 45 67-8", "CH")
+        assertEquals("+41441234567", ch.formatToE164())
+        assertEquals("8", ch.extension)
     }
 
     @Test fun ordinaryNumbersAreUnaffected() {
         // No trailing-group ambiguity: a plainly formatted number still parses in default mode.
         assertEquals("+493012345678", parse("+49 30 12345678", "DE").formatToE164())
+        // Regression: an ordinary space-grouped variable-length number whose leading part is itself a
+        // valid number must NOT be refused — a space is not a Durchwahl separator (a hyphen is).
+        assertEquals("+498963648018", parse("+49 89 636 48018", "DE").formatToE164())
+        assertEquals("+49301234567812", parse("+49 30 12345678 12", "DE").formatToE164())
         // Fixed-length plans (US, GB) are safe because the folded reading is invalid there.
         assertEquals("+12125550123", parse("+1 (212) 555-0123", "US").formatToE164())
         assertEquals("+12125550123", parse("+1-212-555-0123", "US").formatToE164())

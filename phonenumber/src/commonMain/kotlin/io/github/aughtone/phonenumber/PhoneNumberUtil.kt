@@ -255,46 +255,64 @@ public object PhoneNumberUtil {
 
     /**
      * The Durchwahl (direct-dial) ambiguity guard, applied in default mode only (#6). German/Austrian
-     * and similar numbers spell a direct-dial extension with a hyphen or space (`+49 30 12345678-12`);
-     * upstream — and this port's compat mode — fold those digits into the national number, producing a
-     * different, valid-looking number. Here, when the input carries a trailing digit group separated by
-     * formatting, we ask whether the number is valid both **with** and **without** that group:
-     *  - valid both ways → genuinely ambiguous → refuse ([ErrorType.AMBIGUOUS_TRAILING_GROUP]) rather than invent a number;
-     *  - valid only without the group → resolve to the base number, keeping the group as the extension;
-     *  - otherwise → keep the folded number unchanged.
+     * and similar numbers spell a direct-dial extension with a hyphen (`+49 30 12345678-12`); upstream —
+     * and this port's compat mode — fold those digits into the national number, producing a different,
+     * valid-looking number. Here, when the input carries a trailing digit group, we ask whether the
+     * number is valid both **with** and **without** that group, and whether the group's separator is a
+     * hyphen:
+     *  - valid both ways **and** the separator is a hyphen → genuinely ambiguous → refuse ([ErrorType.AMBIGUOUS_TRAILING_GROUP]);
+     *  - valid only without the group (the whole number is invalid) → resolve to the base, keeping the group as the extension;
+     *  - otherwise (including a space-separated group of an otherwise-valid number) → keep the folded number unchanged.
+     *
+     * The hyphen requirement matters: a space is ordinary grouping, and in a variable-length plan the
+     * leading part of a normally-formatted number is frequently a valid number in its own right, so
+     * "valid both ways" on a space-separated group is the common case, not a signal.
      *
      * This is a deliberate divergence from upstream (a variable-length dialling plan makes both readings
      * valid, which upstream does not reason about); fixed-length plans (US, GB) are unaffected because the
      * folded reading is invalid there. See ADR/issue #6.
      */
     private fun resolveDurchwahlAmbiguity(main: String, folded: PhoneNumber): PhoneNumber {
-        val trailingCount = trailingGroupDigitCount(main)
-        if (trailingCount <= 0) return folded
+        val group = trailingGroup(main)
+        if (group.digitCount <= 0) return folded
         val nsn = folded.nationalNumber
-        if (trailingCount >= nsn.length) return folded // removing the group would leave nothing
-        val base = withItalianLeadingZeros(PhoneNumber(folded.countryCode, nsn.dropLast(trailingCount)))
-        val baseValid = isValidNumber(base)
-        if (!baseValid) return folded // the base isn't a number on its own, so nothing is ambiguous
-        if (isValidNumber(folded)) {
+        if (group.digitCount >= nsn.length) return folded // removing the group would leave nothing
+        val base = withItalianLeadingZeros(PhoneNumber(folded.countryCode, nsn.dropLast(group.digitCount)))
+        if (!isValidNumber(base)) return folded // the base isn't a number on its own, so nothing to split
+        val fullValid = isValidNumber(folded)
+        // A trailing group is only evidence of a direct-dial extension when it is set off by a HYPHEN
+        // (the Durchwahl convention) OR the whole number is invalid so the tail cannot belong to it.
+        // A space (or other) separator on an otherwise-valid number is ordinary grouping — in a
+        // variable-length plan the base being valid too is the normal case, not a signal — so we leave
+        // such numbers folded rather than refusing them.
+        if (fullValid && !group.separatorIsHyphen) return folded
+        if (fullValid) {
             throw NumberParseException(
                 ErrorType.AMBIGUOUS_TRAILING_GROUP,
                 "Ambiguous trailing group: the number is valid both with and without it",
             )
         }
         // Folded form is invalid but the base is valid: the trailing group is the direct-dial extension.
-        return base.copy(extension = nsn.takeLast(trailingCount))
+        return base.copy(extension = nsn.takeLast(group.digitCount))
     }
 
+    /** A trailing formatting-separated digit group: its length and whether a hyphen set it off. */
+    private data class TrailingGroup(val digitCount: Int, val separatorIsHyphen: Boolean)
+
+    private fun isHyphen(cp: Int): Boolean = cp == '-'.code || cp in 0x2010..0x2015 || cp == 0x2212
+
     /**
-     * The number of digits in the final formatting-separated group of [main], or 0 when there is no
-     * such group (fewer than two digit runs). Used by [resolveDurchwahlAmbiguity]; counts Unicode
-     * decimal digits by code point so it is deterministic on every target.
+     * The final formatting-separated digit group of [main]: its digit count and whether the separator
+     * immediately before it contains a hyphen. `digitCount` is 0 when there are fewer than two digit
+     * runs. Counts Unicode decimal digits by code point, so it is deterministic on every target.
      */
-    private fun trailingGroupDigitCount(main: String): Int {
+    private fun trailingGroup(main: String): TrailingGroup {
         val part = extractPossibleNumber(main)
         var runs = 0
         var lastRunLen = 0
         var inRun = false
+        var sepHasHyphen = false // hyphen seen in the separator run currently being scanned
+        var lastSepHadHyphen = false // hyphen in the separator immediately before the last digit run
         var i = 0
         while (i < part.length) {
             val c = part[i]
@@ -307,13 +325,14 @@ public object PhoneNumberUtil {
                 i += 1
             }
             if (decimalDigitValue(cp) != null) {
-                if (!inRun) { inRun = true; runs++; lastRunLen = 0 }
+                if (!inRun) { inRun = true; runs++; lastRunLen = 0; lastSepHadHyphen = sepHasHyphen }
                 lastRunLen++
             } else {
-                inRun = false
+                if (inRun) { inRun = false; sepHasHyphen = false } // start of a new separator run
+                if (isHyphen(cp)) sepHasHyphen = true
             }
         }
-        return if (runs >= 2) lastRunLen else 0
+        return if (runs >= 2) TrailingGroup(lastRunLen, lastSepHadHyphen) else TrailingGroup(0, false)
     }
 
     /**
