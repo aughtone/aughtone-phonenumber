@@ -47,6 +47,16 @@ class DurchwahlTest {
         }
     }
 
+    @Test fun unicodeDashesAreTreatedAsTheHyphenSignal() {
+        // #29: a typographic dash typed or autocorrected for a hyphen (en/em dash, minus, fullwidth
+        // hyphen) is the Durchwahl signal too — otherwise it silently folds a wrong number.
+        for (dash in listOf('–', '—', '−', '－')) {
+            val input = "+43 1 58058${dash}0"
+            val e = assertFailsWith<PhoneNumberUtil.NumberParseException>(input) { parse(input, "AT") }
+            assertEquals(PhoneNumberUtil.ErrorType.AMBIGUOUS_TRAILING_GROUP, e.errorType, input)
+        }
+    }
+
     @Test fun compatModeFoldsLikeUpstream() {
         assertEquals("+49301234567812", parse("+49 30 12345678-12", "DE", compat = true).formatToE164())
         assertEquals("+431580580", parse("+43 1 58058-0", "AT", compat = true).formatToE164())
