@@ -14,12 +14,12 @@ libphonenumberMetadata = "9.0.39"
 android-minSdk = "24"
 android-compileSdk = "37"
 
-agp = "9.2.1"
-kotlin = "2.4.0"
+agp = "9.4.1"
+kotlin = "2.4.20"
 kotlinx-serialization = "1.11.0"
 kotlinx-datetime = "0.8.0"
 vanniktech = "0.37.0"
-kotlinBrowser = "2026.7.1"
+kotlinBrowser = "2026.9.2"
 
 [libraries]
 kotlin-browser = { module = "org.jetbrains.kotlin-wrappers:kotlin-browser", version.ref = "kotlinBrowser" }

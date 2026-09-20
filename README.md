@@ -98,7 +98,7 @@ DIGIT_UNICODE_VERSION                          // "17.0.0"
 - **100% pure Kotlin** in `commonMain` — no `expect`/`actual` platform wrappers for the core.
 - **Metadata embedded as Kotlin** — compiled into the binary on every target, with **no runtime resource loading** (the approach that lets wasmJs and native work where classpath/resource loading does not).
 - **Byte-stable, versioned output** — E.164 normalization is stable within a released version and refreshed only when existing output is unchanged.
-- **Multiplatform:** JVM, Android, iOS, macOS, tvOS, watchOS, Linux, MingW, JS, and wasmJs.
+- **Multiplatform:** JVM, Android, iOS, macOS, watchOS, Linux, MingW, JS, and wasmJs.
 
 ## Installation
 
