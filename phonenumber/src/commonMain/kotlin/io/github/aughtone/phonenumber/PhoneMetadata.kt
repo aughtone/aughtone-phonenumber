@@ -16,7 +16,8 @@
  *
  * Modifications: ported from the original Java implementation to Kotlin
  * Multiplatform. Structure and behaviour follow the original; the implementation
- * was rewritten in Kotlin, and reduced to the subset the E.164 normalizer needs.
+ * was rewritten in Kotlin and carries the fields this port's parse / validate /
+ * format surface needs.
  */
 package io.github.aughtone.phonenumber
 

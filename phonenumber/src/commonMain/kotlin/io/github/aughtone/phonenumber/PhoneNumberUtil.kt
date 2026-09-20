@@ -15,9 +15,9 @@
  * limitations under the License.
  *
  * Modifications: ported from the original Java implementation to Kotlin
- * Multiplatform. Behaviour follows the original for the E.164 path; this is a
- * reduced subset (parse to national significant number, format to E.164, and a
- * general-pattern validity check) that the byte-stable normalizer needs.
+ * Multiplatform. Behaviour follows the original across the parse / validate /
+ * format surface; with `libphonenumberCompat = true` it is byte-identical to
+ * upstream, and the default does the more-correct thing (see the README).
  */
 package io.github.aughtone.phonenumber
 
@@ -39,7 +39,11 @@ public enum class CountryCodeSource {
  * [extension], [rawInput], [countryCodeSource] and [preferredDomesticCarrierCode] are populated by
  * the features that own them (extensions #5, raw-input parsing #18) and default to unset otherwise.
  * None of them affects [formatToE164]: E.164 has no slot for an extension or these fields.
+ *
+ * Instances come only from parsing; the constructor and the generated `copy()` are internal, so the
+ * public surface is read-only. ([ConsistentCopyVisibility] makes `copy()` follow the constructor.)
  */
+@ConsistentCopyVisibility
 public data class PhoneNumber internal constructor(
     val countryCode: Int,
     val nationalNumber: String,
@@ -61,12 +65,16 @@ public data class PhoneNumber internal constructor(
 }
 
 /**
- * Minimal, byte-stable phone-number parser and E.164 formatter driven by the
- * embedded [GENERATED_METADATA]. Not yet the full libphonenumber algorithm — it
- * covers the E.164 normalization path (digit extraction, country-code handling,
- * IDD stripping, guarded national-prefix stripping) and a general-pattern
- * validity check. Full per-type validation, possible-length checks, alpha
- * numbers, and Unicode digit normalization are follow-ups.
+ * Byte-stable phone-number parser, validator and formatter driven by the embedded
+ * [GENERATED_METADATA]. It ports libphonenumber's parse / validate / format surface: parsing
+ * (international "+", IDD and national forms, RFC3966 `tel:` URIs, alpha/vanity numbers, extensions,
+ * full-Unicode digits), number typing and validity ([getNumberType], [isValidNumber]), possible-length
+ * checks ([isPossibleNumber]), the formatting family ([format], out-of-country, by-pattern, carrier,
+ * mobile-dialing, original-format), [isNumberMatch], and the read-only accessors.
+ *
+ * With `libphonenumberCompat = true` the covered behaviour is byte-identical to upstream; the default
+ * does the more-correct thing (see the README's compatibility section). Not covered, by design
+ * (see the RADs): AsYouTypeFormatter, PhoneNumberMatcher, and ShortNumberInfo.
  */
 public object PhoneNumberUtil {
 
