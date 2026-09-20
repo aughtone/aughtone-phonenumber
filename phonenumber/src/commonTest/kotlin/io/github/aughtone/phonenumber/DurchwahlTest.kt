@@ -41,7 +41,8 @@ class DurchwahlTest {
             "+43 1 58058-0" to "AT", // Austrian Durchwahl
         )) {
             val e = assertFailsWith<PhoneNumberUtil.NumberParseException>(input) { parse(input, region) }
-            assertEquals(PhoneNumberUtil.ErrorType.NOT_A_NUMBER, e.errorType, input)
+            // Its own error type, so callers can tell it apart from an ordinary non-number (#3 for normalize).
+            assertEquals(PhoneNumberUtil.ErrorType.AMBIGUOUS_TRAILING_GROUP, e.errorType, input)
         }
     }
 

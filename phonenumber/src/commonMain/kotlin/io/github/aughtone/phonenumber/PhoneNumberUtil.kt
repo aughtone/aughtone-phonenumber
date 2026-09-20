@@ -84,9 +84,15 @@ public object PhoneNumberUtil {
     /** The Unicode version of the embedded decimal-digit table (see [DIGIT_UNICODE_VERSION]). */
     public val digitUnicodeVersion: String get() = DIGIT_UNICODE_VERSION
 
-    /** Why a parse failed. Mirrors libphonenumber's `NumberParseException.ErrorType`. */
+    /**
+     * Why a parse failed. The first five mirror libphonenumber's `NumberParseException.ErrorType`
+     * (SCREAMING_SNAKE to match upstream's constant names); [AMBIGUOUS_TRAILING_GROUP] is this port's
+     * own, for the default-mode Durchwahl guard (see [resolveDurchwahlAmbiguity], #6), so callers can
+     * tell an ambiguity refusal apart from an ordinary non-number.
+     */
     public enum class ErrorType {
         INVALID_COUNTRY_CODE, NOT_A_NUMBER, TOO_SHORT_AFTER_IDD, TOO_SHORT_NSN, TOO_LONG,
+        AMBIGUOUS_TRAILING_GROUP,
     }
 
     // Bounds from libphonenumber: an NSN is 2..17 digits, and the raw input is capped to guard
@@ -153,7 +159,7 @@ public object PhoneNumberUtil {
         }
         // Split off a recognised extension (see stripExtension) before parsing the number itself;
         // the extension is carried on the result but never enters the E.164 form.
-        val (main, extension) = stripExtension(built)
+        val (main, extension) = stripExtension(built, libphonenumberCompat)
         var base = parseMain(main, defaultRegion, libphonenumberCompat, keepRawInput)
         // #6 Durchwahl guard: in the default (correct) mode only, a hyphen/space-separated trailing
         // group that upstream would silently fold into the national number is treated as ambiguous.
@@ -253,7 +259,7 @@ public object PhoneNumberUtil {
      * upstream — and this port's compat mode — fold those digits into the national number, producing a
      * different, valid-looking number. Here, when the input carries a trailing digit group separated by
      * formatting, we ask whether the number is valid both **with** and **without** that group:
-     *  - valid both ways → genuinely ambiguous → refuse (`NOT_A_NUMBER`) rather than invent a number;
+     *  - valid both ways → genuinely ambiguous → refuse ([ErrorType.AMBIGUOUS_TRAILING_GROUP]) rather than invent a number;
      *  - valid only without the group → resolve to the base number, keeping the group as the extension;
      *  - otherwise → keep the folded number unchanged.
      *
@@ -271,7 +277,7 @@ public object PhoneNumberUtil {
         if (!baseValid) return folded // the base isn't a number on its own, so nothing is ambiguous
         if (isValidNumber(folded)) {
             throw NumberParseException(
-                ErrorType.NOT_A_NUMBER,
+                ErrorType.AMBIGUOUS_TRAILING_GROUP,
                 "Ambiguous trailing group: the number is valid both with and without it",
             )
         }
@@ -667,7 +673,7 @@ public object PhoneNumberUtil {
     /** True if [number] contains three or more letters (a vanity number), mirroring `isAlphaNumber`. */
     public fun isAlphaNumber(number: String): Boolean {
         if (!isViablePhoneNumber(number)) return false
-        val (main, _) = stripExtension(number)
+        val (main, _) = stripExtension(number, compat = false)
         return hasAtLeastThreeAlpha(main)
     }
 
@@ -957,7 +963,7 @@ public object PhoneNumberUtil {
         if (!isViablePhoneNumber(built)) {
             throw NumberParseException(ErrorType.NOT_A_NUMBER, "The string supplied did not seem to be a phone number")
         }
-        val (main, extension) = stripExtension(built)
+        val (main, extension) = stripExtension(built, compat = false)
         val possible = extractPossibleNumber(main)
         val hasPlus = leadsWithPlus(possible)
         val digits = if (hasAtLeastThreeAlpha(possible)) {
@@ -1758,13 +1764,6 @@ public object PhoneNumberUtil {
 
     private fun isExtSep(c: Char): Boolean = c == ' ' || c == ' ' || c == '\t' || c == ','
 
-    /** ASCII value of an ASCII or fullwidth decimal digit, else null. */
-    private fun extDigit(c: Char): Int? = when (c) {
-        in '0'..'9' -> c - '0'
-        in '０'..'９' -> c - '０'
-        else -> null
-    }
-
     // Explicit labels capture up to 20 extension digits; ambiguous single-char labels up to 9.
     // Lower-cased for case-insensitive matching. Longer forms first so "extn" wins over "ext".
     private val EXPLICIT_EXT_LABELS =
@@ -1781,11 +1780,11 @@ public object PhoneNumberUtil {
      * "xx" in "011xx5481429712" is never taken for an extension. The part before the extension must
      * itself look like a phone number.
      */
-    private fun stripExtension(input: String): Pair<String, String?> {
+    private fun stripExtension(input: String, compat: Boolean): Pair<String, String?> {
         val lower = input.lowercase()
         var i = 0
         while (i < input.length) {
-            val ext = extensionAt(input, lower, i)
+            val ext = extensionAt(input, lower, i, compat)
             if (ext != null && isViablePhoneNumber(input.substring(0, i))) {
                 return input.substring(0, i) to ext
             }
@@ -1794,38 +1793,52 @@ public object PhoneNumberUtil {
         return input to null
     }
 
-    private fun extensionAt(s: String, lower: String, start: Int): String? {
-        if (lower.startsWith(";ext=", start)) return readExtTail(s, start + 5, 20)
-        if (s.startsWith(",,", start)) return readExtTail(s, start + 2, 15)
-        if (s[start] == ';') return readExtTail(s, start + 1, 15)
+    private fun extensionAt(s: String, lower: String, start: Int, compat: Boolean): String? {
+        if (lower.startsWith(";ext=", start)) return readExtTail(s, start + 5, 20, compat = compat)
+        if (s.startsWith(",,", start)) return readExtTail(s, start + 2, 15, compat = compat)
+        if (s[start] == ';') return readExtTail(s, start + 1, 15, compat = compat)
         var j = start
         while (j < s.length && isExtSep(s[j])) j++
         if (j >= s.length) return null
         for (label in EXPLICIT_EXT_LABELS) {
-            if (lower.startsWith(label, j)) return readExtTail(s, j + label.length, 20)
+            if (lower.startsWith(label, j)) return readExtTail(s, j + label.length, 20, compat = compat)
         }
         for (label in AMBIGUOUS_EXT_LABELS) {
-            if (lower.startsWith(label, j)) return readExtTail(s, j + label.length, 9)
+            if (lower.startsWith(label, j)) return readExtTail(s, j + label.length, 9, compat = compat)
         }
         // American style: separators then digits then a required '#'.
-        if (j > start) return readExtTail(s, j, 6, requireHash = true)
+        if (j > start) return readExtTail(s, j, 6, requireHash = true, compat = compat)
         return null
     }
 
     /**
      * Read the digits of an extension: an optional `[:.]`, optional separators/hyphens, then 1..[limit]
      * digits, then an optional (or required, for the American form) `#`. The remainder must be
-     * separators only — the extension is a suffix. Returns the ASCII digits, or null.
+     * separators only — the extension is a suffix. Digits are read by code point with the same table
+     * and mode split as the national number ([normalizeDigitsOnly]): every Unicode `Nd` digit folds to
+     * ASCII in the default mode; under [compat] only BMP digits are recognised and supplementary code
+     * points are skipped, exactly as upstream does. Returns the ASCII digits, or null.
      */
-    private fun readExtTail(s: String, from: Int, limit: Int, requireHash: Boolean = false): String? {
+    private fun readExtTail(s: String, from: Int, limit: Int, requireHash: Boolean = false, compat: Boolean): String? {
         var k = from
         if (k < s.length && (s[k] == ':' || s[k] == '.' || s[k] == '．')) k++
         while (k < s.length && (isExtSep(s[k]) || s[k] == '-')) k++
         val sb = StringBuilder()
         while (k < s.length && sb.length < limit) {
-            val d = extDigit(s[k]) ?: break
+            val c = s[k]
+            val cp: Int
+            val next: Int
+            if (c.isHighSurrogate() && k + 1 < s.length && s[k + 1].isLowSurrogate()) {
+                cp = 0x10000 + ((c.code - 0xD800) shl 10) + (s[k + 1].code - 0xDC00)
+                next = k + 2
+            } else {
+                cp = c.code
+                next = k + 1
+            }
+            if (compat && cp > 0xFFFF) { k = next; continue } // BMP-only under compat, like the number
+            val d = decimalDigitValue(cp) ?: break
             sb.append('0' + d)
-            k++
+            k = next
         }
         if (sb.isEmpty()) return null
         var hashed = false
