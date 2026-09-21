@@ -126,27 +126,19 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Sync back to Develop
+      - name: Sync master back into develop
         run: |
           VERSION="${{ steps.get_version.outputs.VERSION }}"
-          
-          # Fetch develop
+
+          # Bring master's tip — the automated Package.swift checksum commit plus the
+          # release merge — straight onto develop, so develop stays at master + new work
+          # with no manual step. develop is unprotected, so the bot can push to it; the
+          # develop push runs test.yml, and Publish only triggers on master so there is
+          # no re-publish loop.
           git fetch origin develop:develop
           git checkout develop
-          
-          # Create a sync branch
-          git checkout -b sync-master-to-develop-v$VERSION
-          
-          # Merge master
-          git merge master -m "Merge master into sync branch for v$VERSION"
-          git push origin sync-master-to-develop-v$VERSION
-          
-          # Create PR (gracefully fall back if Action has no PR permissions)
-          gh pr create \
-            --title "chore: sync master to develop after v$VERSION release" \
-            --body "This PR syncs the automated \`Package.swift\` checksum update back into the develop branch after a release." \
-            --base develop \
-            --head sync-master-to-develop-v$VERSION || echo "Warning: GitHub Actions is not permitted to create pull requests. Please enable it in Settings > Actions > General > Workflow permissions, or create the PR manually."
+          git merge master -m "Merge master into develop after v$VERSION release"
+          git push origin develop
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

@@ -18,15 +18,6 @@ val hasWatchosSimulator = try {
     false
 }
 
-val hasTvosSimulator = try {
-    val output = providers.exec {
-        commandLine("xcrun", "simctl", "list", "runtimes", "tvos", "--json")
-    }.standardOutput.asText.get()
-    output.contains("\"isAvailable\" : true")
-} catch (e: Exception) {
-    false
-}
-
 group = libs.versions.group.get()
 version = libs.versions.versionName.get()
 
@@ -61,13 +52,9 @@ kotlin {
 
     val xcf = XCFramework("AOPhoneNumberKit")
     listOf(
-        iosX64(),
         iosArm64(),
         iosSimulatorArm64(),
         macosArm64(),
-        tvosArm64(),
-        tvosSimulatorArm64(),
-        watchosArm32(),
         watchosArm64(),
         watchosSimulatorArm64()
     ).forEach { target ->
@@ -116,9 +103,6 @@ kotlin {
 
     tasks.withType<org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeTest>().configureEach {
         if (name.contains("watchosSimulator", ignoreCase = true) && !hasWatchosSimulator) {
-            enabled = false
-        }
-        if (name.contains("tvosSimulator", ignoreCase = true) && !hasTvosSimulator) {
             enabled = false
         }
     }
@@ -188,7 +172,11 @@ afterEvaluate {
 mavenPublishing {
     publishToMavenCentral(automaticRelease = true)
 
-    if (!project.hasProperty("skip-signing")) {
+    val hasInMemoryKey = project.hasProperty("signingInMemoryKey") ||
+            project.hasProperty("signingInMemoryKeyId") ||
+            project.hasProperty("signing.gnupg.keyName")
+
+    if (hasInMemoryKey && !project.hasProperty("skip-signing")) {
         signAllPublications()
     }
 

@@ -49,6 +49,13 @@ public data class PhoneNumber internal constructor(
     val nationalNumber: String,
     /** Phone extension (digits only), or null if none. Never part of the E.164 form. */
     val extension: String? = null,
+    /**
+     * Post-dial string (digits only) — a `,`/`,,`/`;`/`#`/`~`-introduced pause, DTMF or IVR sequence
+     * sent *while* dialling, distinct from an [extension] per RFC 3966 (`;postd=` vs `;ext=`). Null if
+     * none; never part of the E.164 form. Populated in the default mode only (ADR-0003); under
+     * `libphonenumberCompat` such a sequence comes back as [extension] instead, matching upstream.
+     */
+    val postDialString: String? = null,
     /** True when the national number has a meaningful leading zero (e.g. Italian fixed lines). */
     val italianLeadingZero: Boolean = false,
     /** Number of leading zeros when [italianLeadingZero] is true; 1 otherwise. */
@@ -59,6 +66,15 @@ public data class PhoneNumber internal constructor(
     val countryCodeSource: CountryCodeSource = CountryCodeSource.UNSPECIFIED,
     /** Carrier-selection code the caller must dial domestically, when known. */
     val preferredDomesticCarrierCode: String? = null,
+    /**
+     * The trailing run discarded in the default mode when an unrecognised extension marker follows an
+     * already-valid number — the marker and its digits (e.g. "poste 4"), which are neither the number
+     * nor a confirmed extension. Null when nothing was dropped. It lets a caller distinguish "no
+     * extension" from "an extension was discarded" and go back to the source (ADR-0002). Never part of
+     * [formatToE164]. Set only when `allowUnknownExtensions` is off — with it on, the digits are captured
+     * as [extension] instead.
+     */
+    val droppedText: String? = null,
 ) {
     /** Canonical E.164, e.g. "+16502530000". Byte-stable within a released version. */
     public fun formatToE164(): String = "+$countryCode$nationalNumber"
@@ -86,13 +102,14 @@ public object PhoneNumberUtil {
 
     /**
      * Why a parse failed. The first five mirror libphonenumber's `NumberParseException.ErrorType`
-     * (SCREAMING_SNAKE to match upstream's constant names); [AMBIGUOUS_TRAILING_GROUP] is this port's
-     * own, for the default-mode Durchwahl guard (see [resolveDurchwahlAmbiguity], #6), so callers can
-     * tell an ambiguity refusal apart from an ordinary non-number.
+     * (SCREAMING_SNAKE to match upstream's constant names). [AMBIGUOUS_TRAILING_GROUP] (the default-mode
+     * Durchwahl guard, see [resolveDurchwahlAmbiguity], #6) and [ALPHA_NUMBER_DISALLOWED] (a refused
+     * vanity number in default mode, see the `allowVanityNumbers` option on [parse]; ADR-0002) are this
+     * port's own, so callers can tell those refusals apart from an ordinary non-number.
      */
     public enum class ErrorType {
         INVALID_COUNTRY_CODE, NOT_A_NUMBER, TOO_SHORT_AFTER_IDD, TOO_SHORT_NSN, TOO_LONG,
-        AMBIGUOUS_TRAILING_GROUP,
+        AMBIGUOUS_TRAILING_GROUP, ALPHA_NUMBER_DISALLOWED,
     }
 
     // Bounds from libphonenumber: an NSN is 2..17 digits, and the raw input is capped to guard
@@ -117,18 +134,46 @@ public object PhoneNumberUtil {
      * "US"). Handles "+" international form, IDD-prefixed international form, and
      * national form. Returns the number reduced for E.164 formatting.
      *
-     * @param libphonenumberCompat when true, digit normalization matches upstream
-     *   libphonenumber exactly (BMP decimal digits only; see [normalizeDigitsOnly]).
-     *   Off by default: the default recognises all Unicode
-     *   [DIGIT_UNICODE_VERSION] decimal digits, which is a strict superset of the
-     *   inputs upstream accepts. The flag is a per-call option, never global, so
-     *   output stays byte-stable for a given (input, flag) pair.
+     * @param libphonenumberCompat when true, behaviour is byte-identical to upstream
+     *   libphonenumber across the covered surface. Off by default, when the parser does
+     *   the more-correct thing in a few places: it recognises all Unicode
+     *   [DIGIT_UNICODE_VERSION] decimal digits (a strict superset of upstream; see
+     *   [normalizeDigitsOnly]), refuses ambiguous direct-dial (Durchwahl) numbers rather
+     *   than silently folding them ([ErrorType.AMBIGUOUS_TRAILING_GROUP]), drops a trailing
+     *   extension marker that carries no digits instead of corrupting the number, refuses a vanity
+     *   number unless [allowVanityNumbers] is set ([ErrorType.ALPHA_NUMBER_DISALLOWED]), and
+     *   normalizes a parsed extension to ASCII. See the README's compatibility section for the full
+     *   list. The flag is a per-call option, never global, so output stays byte-stable for a given
+     *   (input, flag) pair.
+     * @param allowVanityNumbers when true, a run of letters that the number needs to be valid (a
+     *   vanity number such as "1-800-FLOWERS") is keypad-converted instead of refused. Off by default
+     *   in the corrected mode, where such a number throws [ErrorType.ALPHA_NUMBER_DISALLOWED] rather
+     *   than silently producing a valid-looking wrong number (ADR-0002). Ignored when
+     *   [libphonenumberCompat] is true (compat always converts, matching upstream).
+     * @param allowUnknownExtensions how to treat an unrecognised alphabetic marker after an
+     *   already-valid number (e.g. a foreign extension word not in the built-in set or
+     *   [extensionMarkers]). Off by default: the marker and any digits after it are dropped, leaving the
+     *   correct number with no extension — treating an unknown marker as an extension is a heuristic, so
+     *   by default no extension is invented from unconfirmable input. When true, the trailing digits are
+     *   taken as the extension ("… 0123 poste 4" → ext "4"), a best-effort convenience. Ignored under
+     *   [libphonenumberCompat]. A *recognised* label (built-in or [extensionMarkers]) always yields its
+     *   extension regardless of this flag.
+     * @param extensionMarkers additional extension labels for known input formats, added to the
+     *   built-in set and matched case-insensitively (e.g. `setOf("poste", "ramal")`). Stripped like
+     *   any recognised label; useful when the number before the marker is not independently valid
+     *   ("1234 poste 5" → "1234" ext "5"). Per-call, never global; ignored under [libphonenumberCompat].
      */
     public fun parse(
         number: String,
         defaultRegion: String,
         libphonenumberCompat: Boolean = false,
-    ): PhoneNumber = parseInternal(number, defaultRegion, libphonenumberCompat, keepRawInput = false)
+        allowVanityNumbers: Boolean = false,
+        allowUnknownExtensions: Boolean = false,
+        extensionMarkers: Set<String>? = null,
+    ): PhoneNumber = parseInternal(
+        number, defaultRegion, libphonenumberCompat, keepRawInput = false,
+        allowVanityNumbers = allowVanityNumbers, allowUnknownExtensions = allowUnknownExtensions, extensionMarkers = extensionMarkers,
+    )
 
     /**
      * As [parse], but also records where the number came from: [PhoneNumber.rawInput] is set to
@@ -140,13 +185,22 @@ public object PhoneNumberUtil {
         number: String,
         defaultRegion: String,
         libphonenumberCompat: Boolean = false,
-    ): PhoneNumber = parseInternal(number, defaultRegion, libphonenumberCompat, keepRawInput = true)
+        allowVanityNumbers: Boolean = false,
+        allowUnknownExtensions: Boolean = false,
+        extensionMarkers: Set<String>? = null,
+    ): PhoneNumber = parseInternal(
+        number, defaultRegion, libphonenumberCompat, keepRawInput = true,
+        allowVanityNumbers = allowVanityNumbers, allowUnknownExtensions = allowUnknownExtensions, extensionMarkers = extensionMarkers,
+    )
 
     private fun parseInternal(
         number: String,
         defaultRegion: String,
         libphonenumberCompat: Boolean,
         keepRawInput: Boolean,
+        allowVanityNumbers: Boolean = false,
+        allowUnknownExtensions: Boolean = false,
+        extensionMarkers: Set<String>? = null,
     ): PhoneNumber {
         if (number.length > MAX_INPUT_STRING_LENGTH) {
             throw NumberParseException(ErrorType.TOO_LONG, "The string supplied is too long to be a phone number")
@@ -157,17 +211,106 @@ public object PhoneNumberUtil {
         if (!isViablePhoneNumber(built)) {
             throw NumberParseException(ErrorType.NOT_A_NUMBER, "The string supplied did not seem to be a phone number")
         }
-        // Split off a recognised extension (see stripExtension) before parsing the number itself;
-        // the extension is carried on the result but never enters the E.164 form.
-        val (main, extension) = stripExtension(built, libphonenumberCompat)
-        var base = parseMain(main, defaultRegion, libphonenumberCompat, keepRawInput)
-        // #6 Durchwahl guard: in the default (correct) mode only, a hyphen/space-separated trailing
-        // group that upstream would silently fold into the national number is treated as ambiguous.
-        // Compat mode keeps upstream's folding; a recognised extension means there is nothing to guard.
-        if (!libphonenumberCompat && extension == null) {
-            base = resolveDurchwahlAmbiguity(main, base)
+        // Compat parity: upstream's VALID_PHONE_NUMBER accepts ASCII letters (vanity) but no other
+        // script, so a non-ASCII letter is NOT_A_NUMBER there. Default mode instead treats such a run as
+        // an extension marker (below), so this stricter check is compat-only.
+        if (libphonenumberCompat && containsNonAsciiMarker(built)) {
+            throw NumberParseException(ErrorType.NOT_A_NUMBER, "The string supplied did not seem to be a phone number")
         }
-        if (extension != null) base = base.copy(extension = extension)
+        // Split off a recognised extension (see stripExtension) before parsing the number itself;
+        // the extension is carried on the result but never enters the E.164 form. Caller-supplied
+        // [extensionMarkers] extend the built-in label set in the default mode (#27); compat ignores them.
+        val callerMarkers = if (libphonenumberCompat) null else extensionMarkers
+        val strip = stripExtension(built, libphonenumberCompat, callerMarkers)
+        var main = strip.main
+        var captured = strip.digits       // digits captured by a recognised marker, or null
+        var capturedKind = strip.kind     // whether those digits are an extension or a post-dial string (#30)
+        var droppedText: String? = null
+        // #27 default-mode alphabetic input (ADR-0002): a marker run (letters in any script) is never
+        // keypad-folded into the number. If the part before the marker already forms a valid number, the
+        // marker is an unrecognised extension marker — by default it and its trailing digits are dropped,
+        // keeping the correct number with no extension ("+1 212 555 0123 poste 4" -> +12125550123), and the
+        // discarded run is recorded in droppedText; allowUnknownExtensions instead takes the trailing
+        // digits as the extension. This runs regardless of allowVanityNumbers. Otherwise the letters are
+        // needed to form the number (a vanity number such as "1-800-FLOWERS"): with allowVanityNumbers and
+        // an ASCII (keypad-convertible) run it folds in parseMain, else it is refused. Compat keeps
+        // upstream's keypad conversion.
+        if (!libphonenumberCompat && captured == null && containsMarker(main)) {
+            val split = splitAtMarker(main)
+            val leading = split?.let {
+                try { parseMain(it.leading, defaultRegion, libphonenumberCompat, keepRawInput = false) }
+                catch (e: NumberParseException) { null }
+            }
+            if (split != null && leading != null && isValidNumber(leading)) {
+                main = split.leading
+                if (allowUnknownExtensions) {
+                    captured = split.trailingDigits.ifEmpty { null }
+                    capturedKind = MarkerKind.EXTENSION
+                } else {
+                    droppedText = split.dropped
+                }
+            } else if (hasAtLeastThreeAlpha(main)) {
+                // A vanity number: >=3 ASCII letters that keypad-form the number. Fold if opted in, else refuse.
+                if (!allowVanityNumbers) {
+                    throw NumberParseException(
+                        ErrorType.ALPHA_NUMBER_DISALLOWED,
+                        "Alphabetic (vanity) numbers are not accepted; pass allowVanityNumbers = true to convert them",
+                    )
+                }
+                // else: parseMain keypad-folds below.
+            } else {
+                // A marker run that is neither a trailing extension nor a vanity number — incidental
+                // non-digit characters (e.g. a carrier artifact like "011xx…"): keep upstream's behaviour
+                // and strip them (parseMain drops non-digits below).
+            }
+        }
+        var base = parseMain(main, defaultRegion, libphonenumberCompat, keepRawInput)
+        // #24 default mode: an "extension" whose digits actually belong to the number is re-folded. The
+        // American trailing-"#" form can take a subscriber group ("+1 212 555 0123#" → base +1212555,
+        // ext 0123); when the base is invalid without those digits but valid with them, they are folded
+        // back and no extension is reported. A genuine extension leaves a valid base, so this never
+        // touches "+1 212 555 0123 12#" (ext 12). Compat keeps upstream's split.
+        var resolvedByFold = false
+        if (!libphonenumberCompat && captured != null && !isValidNumber(base)) {
+            val folded = try {
+                parseMain(main + captured, defaultRegion, libphonenumberCompat, keepRawInput)
+            } catch (e: NumberParseException) { null }
+            if (folded != null && isValidNumber(folded)) {
+                base = folded
+                captured = null
+                capturedKind = null
+                resolvedByFold = true
+            }
+        }
+        // #6/#22/#25 Durchwahl guard: in the default (correct) mode only, a hyphen-separated trailing
+        // group that upstream would silently fold into the national number is treated as ambiguous. The
+        // ambiguity is a property of the number, not of a trailing extension, so the guard runs on `main`
+        // whether or not an extension was stripped (#25) — e.g. "+43 1 58058-0#4" refuses just like
+        // "+43 1 58058-0". Compat mode keeps upstream's folding; a #24 re-fold has already settled the
+        // number, so there is nothing to guard.
+        if (!libphonenumberCompat && !resolvedByFold) {
+            val guarded = resolveDurchwahlAmbiguity(main, base) // may throw AMBIGUOUS_TRAILING_GROUP
+            base = if (captured == null || guarded.extension == null) {
+                // Nothing captured, or the guard kept the number folded — take its result (which, with
+                // nothing captured, may itself promote the trailing group to an extension).
+                guarded
+            } else {
+                // #25 collision: the guard would promote a trailing group to an extension while a marker
+                // is already captured (a malformed "…-123456#4"). Keep the captured marker (attached
+                // below) and the folded number rather than double-assigning.
+                base
+            }
+        }
+        // Route the captured digits to the right field — an extension, or a post-dial string (#30,
+        // ADR-0003). Compat returns everything as an extension, matching upstream.
+        if (captured != null) {
+            base = if (libphonenumberCompat || capturedKind == MarkerKind.EXTENSION) {
+                base.copy(extension = captured)
+            } else {
+                base.copy(postDialString = captured)
+            }
+        }
+        if (droppedText != null) base = base.copy(droppedText = droppedText)
         if (keepRawInput) base = base.copy(rawInput = number)
         return base
     }
@@ -255,46 +398,91 @@ public object PhoneNumberUtil {
 
     /**
      * The Durchwahl (direct-dial) ambiguity guard, applied in default mode only (#6). German/Austrian
-     * and similar numbers spell a direct-dial extension with a hyphen or space (`+49 30 12345678-12`);
-     * upstream — and this port's compat mode — fold those digits into the national number, producing a
-     * different, valid-looking number. Here, when the input carries a trailing digit group separated by
-     * formatting, we ask whether the number is valid both **with** and **without** that group:
-     *  - valid both ways → genuinely ambiguous → refuse ([ErrorType.AMBIGUOUS_TRAILING_GROUP]) rather than invent a number;
-     *  - valid only without the group → resolve to the base number, keeping the group as the extension;
-     *  - otherwise → keep the folded number unchanged.
+     * and similar numbers spell a direct-dial extension with a hyphen (`+49 30 12345678-12`); upstream —
+     * and this port's compat mode — fold those digits into the national number, producing a different,
+     * valid-looking number. Here, when the input carries a trailing digit group, we ask whether the
+     * number is valid both **with** and **without** that group, and whether the group's separator is a
+     * hyphen:
+     *  - valid both ways **and** the separator is a hyphen → genuinely ambiguous → refuse ([ErrorType.AMBIGUOUS_TRAILING_GROUP]);
+     *  - valid only without the group (the whole number is invalid) → resolve to the base, keeping the group as the extension;
+     *  - otherwise (including a space-separated group of an otherwise-valid number) → keep the folded number unchanged.
+     *
+     * The hyphen requirement matters: a space is ordinary grouping, and in a variable-length plan the
+     * leading part of a normally-formatted number is frequently a valid number in its own right, so
+     * "valid both ways" on a space-separated group is the common case, not a signal.
      *
      * This is a deliberate divergence from upstream (a variable-length dialling plan makes both readings
      * valid, which upstream does not reason about); fixed-length plans (US, GB) are unaffected because the
      * folded reading is invalid there. See ADR/issue #6.
      */
     private fun resolveDurchwahlAmbiguity(main: String, folded: PhoneNumber): PhoneNumber {
-        val trailingCount = trailingGroupDigitCount(main)
-        if (trailingCount <= 0) return folded
+        val group = trailingGroup(main)
+        if (group.digitCount <= 0) return folded
         val nsn = folded.nationalNumber
-        if (trailingCount >= nsn.length) return folded // removing the group would leave nothing
-        val base = withItalianLeadingZeros(PhoneNumber(folded.countryCode, nsn.dropLast(trailingCount)))
-        val baseValid = isValidNumber(base)
-        if (!baseValid) return folded // the base isn't a number on its own, so nothing is ambiguous
-        if (isValidNumber(folded)) {
+        if (group.digitCount >= nsn.length) return folded // removing the group would leave nothing
+        val base = withItalianLeadingZeros(PhoneNumber(folded.countryCode, nsn.dropLast(group.digitCount)))
+        if (!isValidNumber(base)) return folded // the base isn't a number on its own, so nothing to split
+        val fullValid = isValidNumber(folded)
+        // A trailing group is only evidence of a direct-dial extension when it is set off by a HYPHEN
+        // (the Durchwahl convention) OR the whole number is invalid so the tail cannot belong to it.
+        // A space (or other) separator on an otherwise-valid number is ordinary grouping — in a
+        // variable-length plan the base being valid too is the normal case, not a signal — so we leave
+        // such numbers folded rather than refusing them.
+        if (fullValid && !group.separatorIsHyphen) return folded
+        if (fullValid) {
             throw NumberParseException(
                 ErrorType.AMBIGUOUS_TRAILING_GROUP,
                 "Ambiguous trailing group: the number is valid both with and without it",
             )
         }
         // Folded form is invalid but the base is valid: the trailing group is the direct-dial extension.
-        return base.copy(extension = nsn.takeLast(trailingCount))
+        return base.copy(extension = nsn.takeLast(group.digitCount))
     }
 
+    /** A trailing formatting-separated digit group: its length and whether a hyphen set it off. */
+    private data class TrailingGroup(val digitCount: Int, val separatorIsHyphen: Boolean)
+
+    // Frozen formatting-character model (ADR-0002, #29). The non-ASCII members replicate upstream
+    // libphonenumber's VALID_PUNCTUATION exactly, so compat mode accepts and strips exactly what upstream
+    // does — and rejects the same, since a non-ASCII letter is not punctuation there (NOT_A_NUMBER). The
+    // default-mode marker detector uses the same set, so a formatting character (a Unicode dash, a
+    // no-break/zero-width space, a fullwidth paren, from autocorrect / CJK / a web or PDF paste) is never
+    // misread as a marker, and a dash typed for a hyphen (incl. U+FF0D, U+30FC) is caught as the
+    // Durchwahl signal. Frozen for byte-stability, like the decimal-digit table.
+    private val DASH_CODE_POINTS: Set<Int> = setOf(
+        0x002D, 0x2010, 0x2011, 0x2012, 0x2013, 0x2014, 0x2015, 0x2212, 0x30FC, 0xFF0D,
+    )
+    private val FORMATTING_CODE_POINTS: Set<Int> = setOf(
+        // ASCII separators and punctuation (never a marker; ASCII never triggers the compat check).
+        0x0009, 0x0020, '('.code, ')'.code, '['.code, ']'.code, '.'.code, ','.code,
+        '/'.code, '*'.code, '#'.code, ';'.code, ':'.code, '~'.code,
+        // Non-ASCII: exactly libphonenumber's VALID_PUNCTUATION, so compat matches upstream byte-for-byte.
+        0x00A0, 0x00AD, 0x200B, 0x2060, 0x3000,
+        0xFF08, 0xFF09, 0xFF3B, 0xFF3D, 0xFF0E, 0xFF0F, 0xFF5E, 0x2053, 0x223C,
+    )
+
+    /** A dash/hyphen from upstream's punctuation set (incl. U+FF0D, U+30FC) — the Durchwahl signal (#29). */
+    private fun isHyphen(cp: Int): Boolean = cp in DASH_CODE_POINTS
+
+    /** A phone formatting character — separator, dash, or punctuation — never a marker. */
+    private fun isFormattingChar(cp: Int): Boolean = cp in FORMATTING_CODE_POINTS || cp in DASH_CODE_POINTS
+
+    /** A marker (letter-like) code point: neither a decimal digit, a "+", nor a formatting character. */
+    private fun isMarkerChar(cp: Int): Boolean =
+        cp != '+'.code && cp != 0xFF0B && decimalDigitValue(cp) == null && !isFormattingChar(cp)
+
     /**
-     * The number of digits in the final formatting-separated group of [main], or 0 when there is no
-     * such group (fewer than two digit runs). Used by [resolveDurchwahlAmbiguity]; counts Unicode
-     * decimal digits by code point so it is deterministic on every target.
+     * The final formatting-separated digit group of [main]: its digit count and whether the separator
+     * immediately before it contains a hyphen. `digitCount` is 0 when there are fewer than two digit
+     * runs. Counts Unicode decimal digits by code point, so it is deterministic on every target.
      */
-    private fun trailingGroupDigitCount(main: String): Int {
+    private fun trailingGroup(main: String): TrailingGroup {
         val part = extractPossibleNumber(main)
         var runs = 0
         var lastRunLen = 0
         var inRun = false
+        var sepHasHyphen = false // hyphen seen in the separator run currently being scanned
+        var lastSepHadHyphen = false // hyphen in the separator immediately before the last digit run
         var i = 0
         while (i < part.length) {
             val c = part[i]
@@ -307,13 +495,14 @@ public object PhoneNumberUtil {
                 i += 1
             }
             if (decimalDigitValue(cp) != null) {
-                if (!inRun) { inRun = true; runs++; lastRunLen = 0 }
+                if (!inRun) { inRun = true; runs++; lastRunLen = 0; lastSepHadHyphen = sepHasHyphen }
                 lastRunLen++
             } else {
-                inRun = false
+                if (inRun) { inRun = false; sepHasHyphen = false } // start of a new separator run
+                if (isHyphen(cp)) sepHasHyphen = true
             }
         }
-        return if (runs >= 2) lastRunLen else 0
+        return if (runs >= 2) TrailingGroup(lastRunLen, lastSepHadHyphen) else TrailingGroup(0, false)
     }
 
     /**
@@ -381,8 +570,14 @@ public object PhoneNumberUtil {
         number: String,
         defaultRegion: String,
         libphonenumberCompat: Boolean = false,
+        allowVanityNumbers: Boolean = false,
+        allowUnknownExtensions: Boolean = false,
+        extensionMarkers: Set<String>? = null,
     ): Boolean = try {
-        val pn = parse(number, defaultRegion, libphonenumberCompat)
+        val pn = parse(
+            number, defaultRegion, libphonenumberCompat,
+            allowVanityNumbers = allowVanityNumbers, allowUnknownExtensions = allowUnknownExtensions, extensionMarkers = extensionMarkers,
+        )
         val region = getRegionForNumber(pn.countryCode, pn.nationalNumber)
         val meta = region?.let { GENERATED_METADATA[it] }
         meta != null && isValidForRegion(pn.nationalNumber, meta)
@@ -616,6 +811,18 @@ public object PhoneNumberUtil {
     public fun getSupportedRegions(): Set<String> =
         GENERATED_METADATA.values.mapNotNull { if (it.id != REGION_CODE_FOR_NON_GEO_ENTITY) it.id else null }.toSet()
 
+    /**
+     * True if [regionCode] is a supported **geographic** region — one this library has metadata for.
+     * O(1) (a single metadata-key lookup). Excludes the non-geographical entity `"001"` and any unknown
+     * code (`"ZZ"`, `""`, garbage), so the result agrees exactly with membership in [getSupportedRegions].
+     * Region codes are the upper-case ISO 3166-1 alpha-2 codes used throughout this API; matching is
+     * case-sensitive, as elsewhere.
+     *
+     * Prefer this over probing with `parse("+…", regionCode)`: a `+`-prefixed number carries its own
+     * calling code and parses regardless of the region argument, so that is not a region-validity test.
+     */
+    public fun isSupportedRegion(regionCode: String): Boolean = isValidRegionCode(regionCode)
+
     /** All supported country calling codes (geographic and non-geographical). */
     public fun getSupportedCallingCodes(): Set<Int> = COUNTRY_CODE_TO_MAIN_REGION.keys.toSet()
 
@@ -673,8 +880,7 @@ public object PhoneNumberUtil {
     /** True if [number] contains three or more letters (a vanity number), mirroring `isAlphaNumber`. */
     public fun isAlphaNumber(number: String): Boolean {
         if (!isViablePhoneNumber(number)) return false
-        val (main, _) = stripExtension(number, compat = false)
-        return hasAtLeastThreeAlpha(main)
+        return hasAtLeastThreeAlpha(stripExtension(number, compat = false).main)
     }
 
     /** Whether [number] can be dialled from outside its region, mirroring `canBeInternationallyDialled`. */
@@ -854,8 +1060,10 @@ public object PhoneNumberUtil {
      * model.
      */
     public fun isNumberMatch(first: PhoneNumber, second: PhoneNumber): MatchType {
-        val aExt = first.extension?.ifEmpty { null }
-        val bExt = second.extension?.ifEmpty { null }
+        // For matching, a captured sub-address counts whether it landed in extension or postDialString
+        // (#30): upstream has only extension, so "… extn 1234" and "…#1234" compare as the same value.
+        val aExt = (first.extension ?: first.postDialString)?.ifEmpty { null }
+        val bExt = (second.extension ?: second.postDialString)?.ifEmpty { null }
         // Early exit if both had extensions and they differ.
         if (aExt != null && bExt != null && aExt != bExt) return MatchType.NO_MATCH
 
@@ -880,13 +1088,13 @@ public object PhoneNumberUtil {
      */
     public fun isNumberMatch(first: PhoneNumber, second: String): MatchType {
         val secondProto = try {
-            parse(second, UNKNOWN_REGION)
+            parse(second, UNKNOWN_REGION, allowVanityNumbers = true)
         } catch (e: NumberParseException) {
             if (e.errorType != ErrorType.INVALID_COUNTRY_CODE) return MatchType.NOT_A_NUMBER
             val firstRegion = getRegionCodeForCountryCode(first.countryCode)
             return try {
                 if (firstRegion != UNKNOWN_REGION) {
-                    val withRegion = parse(second, firstRegion)
+                    val withRegion = parse(second, firstRegion, allowVanityNumbers = true)
                     val match = isNumberMatch(first, withRegion)
                     if (match == MatchType.EXACT_MATCH) MatchType.NSN_MATCH else match
                 } else {
@@ -905,11 +1113,11 @@ public object PhoneNumberUtil {
      */
     public fun isNumberMatch(first: String, second: String): MatchType {
         val firstProto = try {
-            parse(first, UNKNOWN_REGION)
+            parse(first, UNKNOWN_REGION, allowVanityNumbers = true)
         } catch (e: NumberParseException) {
             if (e.errorType != ErrorType.INVALID_COUNTRY_CODE) return MatchType.NOT_A_NUMBER
             val secondProto = try {
-                parse(second, UNKNOWN_REGION)
+                parse(second, UNKNOWN_REGION, allowVanityNumbers = true)
             } catch (e2: NumberParseException) {
                 if (e2.errorType != ErrorType.INVALID_COUNTRY_CODE) return MatchType.NOT_A_NUMBER
                 return try {
@@ -963,8 +1171,8 @@ public object PhoneNumberUtil {
         if (!isViablePhoneNumber(built)) {
             throw NumberParseException(ErrorType.NOT_A_NUMBER, "The string supplied did not seem to be a phone number")
         }
-        val (main, extension) = stripExtension(built, compat = false)
-        val possible = extractPossibleNumber(main)
+        val strip = stripExtension(built, compat = false)
+        val possible = extractPossibleNumber(strip.main)
         val hasPlus = leadsWithPlus(possible)
         val digits = if (hasAtLeastThreeAlpha(possible)) {
             alphaConvertForParsing(possible, libphonenumberCompat = false)
@@ -975,7 +1183,8 @@ public object PhoneNumberUtil {
         val extraction = maybeExtractCountryCode(digits, hasPlus, meta = null)
         val nsn = if (extraction.countryCode != 0) extraction.nationalNumber else digits
         val base = validateLength(withItalianLeadingZeros(PhoneNumber(extraction.countryCode, nsn)))
-        return if (extension != null) base.copy(extension = extension) else base
+        // For matching, a captured marker (extension or post-dial) is compared as the extension.
+        return if (strip.digits != null) base.copy(extension = strip.digits) else base
     }
 
     /**
@@ -1717,6 +1926,59 @@ public object PhoneNumberUtil {
         return false
     }
 
+    /** The result of splitting [main] at its first marker run (#27): the raw part before the marker, the
+     * ASCII decimal digits after it (candidate extension), and the raw discarded run (marker + trailing). */
+    private class MarkerSplit(val leading: String, val trailingDigits: String, val dropped: String)
+
+    /** The Unicode code point at [i] in [s], with its UTF-16 length (1 or 2). */
+    private fun codePointAt(s: String, i: Int): Pair<Int, Int> {
+        val c = s[i]
+        return if (c.isHighSurrogate() && i + 1 < s.length && s[i + 1].isLowSurrogate()) {
+            (0x10000 + ((c.code - 0xD800) shl 10) + (s[i + 1].code - 0xDC00)) to 2
+        } else {
+            c.code to 1
+        }
+    }
+
+    /** Index of the first marker (letter-like, any script) code point in [s], or -1. */
+    private fun firstMarkerIndex(s: String): Int {
+        var i = 0
+        while (i < s.length) {
+            val (cp, n) = codePointAt(s, i)
+            if (isMarkerChar(cp)) return i
+            i += n
+        }
+        return -1
+    }
+
+    /** True if [s] contains a marker (letter-like) code point in any script. */
+    private fun containsMarker(s: String): Boolean = firstMarkerIndex(s) >= 0
+
+    /** True if [s] contains a marker code point outside ASCII (a non-Latin / fullwidth letter). */
+    private fun containsNonAsciiMarker(s: String): Boolean {
+        var i = 0
+        while (i < s.length) {
+            val (cp, n) = codePointAt(s, i)
+            if (cp > 0x7F && isMarkerChar(cp)) return true
+            i += n
+        }
+        return false
+    }
+
+    /**
+     * Split [main] at its first marker run (#27, ADR-0002): the raw substring *before* the marker — to be
+     * re-parsed as the number — the ASCII decimal digits after it (the candidate extension), and the raw
+     * discarded run. Null when the marker has nothing before it (a pure vanity number like "FLOWERS…"),
+     * which the caller treats as vanity/refusal. Detection is script-agnostic and byte-stable
+     * ([isMarkerChar]).
+     */
+    private fun splitAtMarker(main: String): MarkerSplit? {
+        val start = firstMarkerIndex(main)
+        if (start <= 0) return null
+        val dropped = main.substring(start)
+        return MarkerSplit(main.substring(0, start), normalizeDigitsOnly(dropped, libphonenumberCompat = false), dropped)
+    }
+
     /** Phone-keypad digit for an ASCII letter, mirroring libphonenumber's ALPHA_MAPPINGS. */
     private fun keypadDigit(c: Char): Char? = when (c.uppercaseChar()) {
         'A', 'B', 'C' -> '2'
@@ -1764,12 +2026,17 @@ public object PhoneNumberUtil {
 
     private fun isExtSep(c: Char): Boolean = c == ' ' || c == ' ' || c == '\t' || c == ','
 
+    // Whether a captured marker means an extension (dialled after connect) or a post-dial string (sent
+    // while dialling — pause/DTMF/IVR), per RFC 3966's ;ext= vs ;postd= (#30, ADR-0003).
+    private enum class MarkerKind { EXTENSION, POST_DIAL }
+
     // Explicit labels capture up to 20 extension digits; ambiguous single-char labels up to 9.
     // Lower-cased for case-insensitive matching. Longer forms first so "extn" wins over "ext".
     private val EXPLICIT_EXT_LABELS =
         listOf("extension", "extensión", "exten", "extn", "ext", "xtn", "xt", "anexo", "доб", "ｅｘｔｎ", "ｘｔｎ", "ｘｔ")
-    private val AMBIGUOUS_EXT_LABELS =
-        listOf("int", "ｉｎｔ", "x", "ｘ", "#", "＃", "~", "～")
+    // Ambiguous single-char labels, split by concept (#30): extension words vs post-dial characters.
+    private val AMBIGUOUS_EXT_LABELS = listOf("int", "ｉｎｔ", "x", "ｘ")
+    private val POST_DIAL_LABELS = listOf("#", "＃", "~", "～")
 
     /**
      * Split a recognised phone extension off [input], returning (main, extension) with the
@@ -1780,34 +2047,76 @@ public object PhoneNumberUtil {
      * "xx" in "011xx5481429712" is never taken for an extension. The part before the extension must
      * itself look like a phone number.
      */
-    private fun stripExtension(input: String, compat: Boolean): Pair<String, String?> {
+    /** [main] with a recognised marker removed, plus the captured digits and whether they are an
+     * extension or a post-dial string (#30). [digits]/[kind] are null when nothing was captured. */
+    private class ExtStrip(val main: String, val digits: String?, val kind: MarkerKind?)
+
+    private fun stripExtension(input: String, compat: Boolean, extensionMarkers: Set<String>? = null): ExtStrip {
         val lower = input.lowercase()
+        // Caller-supplied labels (#27), added to the built-in explicit set and matched case-insensitively.
+        val extra: List<String> = extensionMarkers?.mapNotNull { it.lowercase().ifEmpty { null } } ?: emptyList()
         var i = 0
         while (i < input.length) {
-            val ext = extensionAt(input, lower, i, compat)
+            val ext = extensionAt(input, lower, i, compat, extra)
             if (ext != null && isViablePhoneNumber(input.substring(0, i))) {
-                return input.substring(0, i) to ext
+                return ExtStrip(input.substring(0, i), ext.second, ext.first)
             }
             i++
         }
-        return input to null
+        // #23 default mode: a recognised explicit extension label with no digits after it (a dangling
+        // "… 0123 ext") is not a real extension, but left in place its letters keypad-fold into the
+        // number ("ext" → 398). Drop the dangling marker instead. Compat keeps upstream's fold.
+        if (!compat) {
+            val stripped = stripDanglingExtLabel(input, lower, extra)
+            if (stripped != null && isViablePhoneNumber(stripped)) return ExtStrip(stripped, null, null)
+        }
+        return ExtStrip(input, null, null)
     }
 
-    private fun extensionAt(s: String, lower: String, start: Int, compat: Boolean): String? {
-        if (lower.startsWith(";ext=", start)) return readExtTail(s, start + 5, 20, compat = compat)
-        if (s.startsWith(",,", start)) return readExtTail(s, start + 2, 15, compat = compat)
-        if (s[start] == ';') return readExtTail(s, start + 1, 15, compat = compat)
+    /**
+     * If [s] ends with a recognised explicit extension label — preceded by a separator and followed only
+     * by separators, with no digits — return [s] with that dangling marker removed; otherwise null. Only
+     * the unambiguous explicit labels (`ext`, `extn`, `extension`, …) qualify, so ordinary vanity letters
+     * are never stripped. Used in the default mode only ([stripExtension]).
+     */
+    private fun stripDanglingExtLabel(s: String, lower: String, extra: List<String> = emptyList()): String? {
+        for (start in s.indices) {
+            if (start == 0 || !(isExtSep(s[start - 1]) || s[start - 1] == '-')) continue
+            for (label in EXPLICIT_EXT_LABELS + extra) {
+                if (!lower.startsWith(label, start)) continue
+                var k = start + label.length
+                if (k < s.length && (s[k] == ':' || s[k] == '.' || s[k] == '．')) k++
+                while (k < s.length && (isExtSep(s[k]) || s[k] == '-')) k++
+                if (k == s.length) {
+                    var p = start
+                    while (p > 0 && (isExtSep(s[p - 1]) || s[p - 1] == '-')) p--
+                    return s.substring(0, p)
+                }
+            }
+        }
+        return null
+    }
+
+    private fun extensionAt(s: String, lower: String, start: Int, compat: Boolean, extra: List<String> = emptyList()): Pair<MarkerKind, String>? {
+        fun ext(digits: String?) = digits?.let { MarkerKind.EXTENSION to it }
+        fun post(digits: String?) = digits?.let { MarkerKind.POST_DIAL to it }
+        if (lower.startsWith(";ext=", start)) return ext(readExtTail(s, start + 5, 20, compat = compat))
+        if (s.startsWith(",,", start)) return post(readExtTail(s, start + 2, 15, compat = compat))
+        if (s[start] == ';') return post(readExtTail(s, start + 1, 15, compat = compat))
         var j = start
         while (j < s.length && isExtSep(s[j])) j++
         if (j >= s.length) return null
-        for (label in EXPLICIT_EXT_LABELS) {
-            if (lower.startsWith(label, j)) return readExtTail(s, j + label.length, 20, compat = compat)
+        for (label in EXPLICIT_EXT_LABELS + extra) {
+            if (lower.startsWith(label, j)) return ext(readExtTail(s, j + label.length, 20, compat = compat))
         }
         for (label in AMBIGUOUS_EXT_LABELS) {
-            if (lower.startsWith(label, j)) return readExtTail(s, j + label.length, 9, compat = compat)
+            if (lower.startsWith(label, j)) return ext(readExtTail(s, j + label.length, 9, compat = compat))
         }
-        // American style: separators then digits then a required '#'.
-        if (j > start) return readExtTail(s, j, 6, requireHash = true, compat = compat)
+        for (label in POST_DIAL_LABELS) {
+            if (lower.startsWith(label, j)) return post(readExtTail(s, j + label.length, 9, compat = compat))
+        }
+        // American style: separators then digits then a required '#'. A post-dial (DTMF) sequence.
+        if (j > start) return post(readExtTail(s, j, 6, requireHash = true, compat = compat))
         return null
     }
 
