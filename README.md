@@ -108,7 +108,7 @@ DIGIT_UNICODE_VERSION                          // "17.0.0"
 
 ```kotlin
 dependencies {
-    implementation("io.github.aughtone:phonenumber:0.0.3")
+    implementation("io.github.aughtone:phonenumber:0.0.4")
 }
 ```
 
